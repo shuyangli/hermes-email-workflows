@@ -34,6 +34,8 @@ Gmail requires the Pub/Sub topic to live in the same Google Cloud project as the
 
 ## Google Cloud preparation
 
+For a self-contained handoff to an agent provisioning the cloud resources on another device, see [GOOGLE_CLOUD_PROVISIONING.md](GOOGLE_CLOUD_PROVISIONING.md).
+
 For the OAuth client's project:
 
 1. Enable the **Gmail API** and **Cloud Pub/Sub API**.

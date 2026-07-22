@@ -124,8 +124,13 @@ def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
     result = engine.process(email, rules, allow_rematch=True)
 
     assert result.status == "completed"
-    assert events == ["reclaimed", "read", "finished:notification_pending:completed", "sent",
-                      "finished:completed"]
+    assert events == [
+        "reclaimed",
+        "read",
+        "finished:notification_pending:completed",
+        "sent",
+        "finished:completed",
+    ]
 
 
 def test_unmatched_message_is_not_re_evaluated_without_rematch():
