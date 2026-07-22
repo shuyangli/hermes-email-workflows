@@ -6,15 +6,14 @@ import json
 import os
 from pathlib import Path
 
+import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/pubsub",
-]
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+PUBSUB_SCOPES = ["https://www.googleapis.com/auth/pubsub"]
 
 
 def begin_oauth(client_secret_path: str, redirect_uri: str) -> tuple[str, str, str]:
@@ -65,15 +64,28 @@ def load_credentials(token_path: str | Path) -> Credentials:
 
 def save_credentials(credentials: Credentials, token_path: str | Path) -> None:
     path = Path(token_path).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(credentials.to_json(), encoding="utf-8")
-    os.chmod(path, 0o600)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    temporary = path.with_name(f".{path.name}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(credentials.to_json())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load_pubsub_credentials():
+    credentials, _ = google.auth.default(scopes=PUBSUB_SCOPES)
+    return credentials
 
 
 def build_services(credentials: Credentials):
+    pubsub_credentials = load_pubsub_credentials()
     return (
         build("gmail", "v1", credentials=credentials, cache_discovery=False),
-        build("pubsub", "v1", credentials=credentials, cache_discovery=False),
+        build("pubsub", "v1", credentials=pubsub_credentials, cache_discovery=False),
     )
 
 

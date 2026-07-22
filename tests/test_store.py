@@ -38,3 +38,32 @@ def test_settings_round_trip(tmp_path: Path):
     store.set_setting("project_id", "example-project")
     assert store.get_setting("project_id") == "example-project"
     assert store.get_setting("missing", "fallback") == "fallback"
+
+
+def test_restart_recovers_interrupted_processing_claim(tmp_path: Path):
+    path = tmp_path / "app.db"
+    assert Store(path).claim_message("me@example.com", "m1") is True
+    restarted = Store(path)
+    assert restarted.get_event("me@example.com", "m1")["status"] == "retryable"
+    assert restarted.claim_message("me@example.com", "m1") is True
+
+
+def test_existing_data_permissions_are_repaired(tmp_path: Path):
+    directory = tmp_path / "data"
+    directory.mkdir(mode=0o755)
+    path = directory / "app.db"
+    Store(path)
+    path.chmod(0o644)
+    directory.chmod(0o755)
+    wal = Path(f"{path}-wal")
+    shm = Path(f"{path}-shm")
+    wal.touch(mode=0o644)
+    shm.touch(mode=0o644)
+
+    Store(path)
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    for sidecar in (wal, shm):
+        if sidecar.exists():
+            assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600

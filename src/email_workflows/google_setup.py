@@ -53,6 +53,13 @@ class GoogleSetup:
                     "expirationPolicy": {},
                 },
             ).execute()
+        else:
+            existing = subscriptions.get(subscription=subscription).execute()
+            if existing.get("topic") != topic:
+                raise RuntimeError(
+                    f"Existing subscription {subscription} points to {existing.get('topic')}, "
+                    f"not {topic}"
+                )
         return PubSubResources(topic, subscription)
 
     @staticmethod

@@ -27,7 +27,7 @@ class Topics:
         self.created = []
         self.policy = None
 
-    def get(self, **kwargs):
+    def get(self, **kwargs) -> Request:
         raise ApiError(404)
 
     def create(self, **kwargs):
@@ -46,7 +46,7 @@ class Subscriptions:
     def __init__(self):
         self.created = []
 
-    def get(self, **kwargs):
+    def get(self, **kwargs) -> Request:
         raise ApiError(404)
 
     def create(self, **kwargs):
@@ -98,3 +98,24 @@ def test_resource_lookup_propagates_permission_errors():
         assert exc.resp.status == 403
     else:
         raise AssertionError("expected permission error")
+
+
+def test_existing_subscription_must_target_requested_topic():
+    class ExistingTopics(Topics):
+        def get(self, **kwargs):
+            return Request({"name": kwargs["topic"]})
+
+    class ExistingSubscriptions(Subscriptions):
+        def get(self, **kwargs):
+            return Request({"topic": "projects/my-project/topics/other"})
+
+    pubsub = PubSub()
+    pubsub.topic_api = ExistingTopics()
+    pubsub.sub_api = ExistingSubscriptions()
+    pubsub.p = Projects(pubsub.topic_api, pubsub.sub_api)
+    try:
+        GoogleSetup(pubsub).ensure_pubsub("my-project", "gmail-events", "gmail-events-local")
+    except RuntimeError as exc:
+        assert "topics/other" in str(exc)
+    else:
+        raise AssertionError("expected topic mismatch")

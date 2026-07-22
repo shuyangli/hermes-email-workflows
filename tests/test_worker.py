@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 
-from email_workflows.models import EmailMessage
+from email_workflows.engine import WorkflowEngine
+from email_workflows.models import EmailMessage, Rule, TaskResult
+from email_workflows.store import Store
 from email_workflows.worker import WorkflowWorker
 
 
@@ -70,3 +72,122 @@ def test_notification_for_inactive_account_is_acked_without_processing():
     event = PubSubMessage({"emailAddress": "old@example.com", "historyId": "12"})
     WorkflowWorker(Store(), Never(), Never()).handle_message(event)
     assert event.acked is True
+
+
+def test_malformed_notification_is_acked_as_poison_message():
+    class Store:
+        values = {}
+
+        def set_setting(self, key, value):
+            self.values[key] = value
+
+    class Never:
+        def __getattr__(self, name):
+            raise AssertionError("must not use")
+
+    event = PubSubMessage({"historyId": "12"})
+    store = Store()
+    WorkflowWorker(store, Never(), Never()).handle_message(event)
+    assert event.acked is True and event.nacked is False
+    assert store.values["last_worker_error"] == "Malformed Pub/Sub notification"
+
+
+def test_stale_history_recovers_from_current_unread_mail():
+    class Response:
+        status = 404
+
+    class StaleHistory(RuntimeError):
+        resp = Response()
+
+    class Store:
+        values = {
+            "account_email": "me@example.com",
+            "history_id": "old",
+            "topic_path": "projects/p/topics/t",
+        }
+
+        def get_setting(self, key, default=None):
+            return self.values.get(key, default)
+
+        def set_setting(self, key, value):
+            self.values[key] = value
+
+        def list_rules(self, account_email=None):
+            return ["rule"]
+
+    class Gmail:
+        def history_message_ids(self, cursor):
+            raise StaleHistory()
+
+        def start_watch(self, topic):
+            return {"historyId": "fresh", "expiration": "999"}
+
+        def unread_inbox_message_ids(self):
+            return ["m1"]
+
+        def fetch_message(self, message_id):
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, ["UNREAD"])
+
+    class Engine:
+        processed = []
+
+        def process(self, message, rules):
+            self.processed.append(message.gmail_id)
+
+    store, engine = Store(), Engine()
+    event = PubSubMessage({"emailAddress": "me@example.com", "historyId": "20"})
+    WorkflowWorker(store, Gmail(), engine).handle_message(event)
+    assert event.acked is True
+    assert engine.processed == ["m1"]
+    assert store.values["history_id"] == "fresh"
+
+
+def test_worker_redelivery_retries_saved_notification_after_message_is_read(tmp_path):
+    store = Store(tmp_path / "app.db")
+    store.set_setting("account_email", "me@example.com")
+    store.set_setting("history_id", "10")
+    store.create_rule(Rule(None, "rule", "from:a", "summarize"))
+    calls = {"run": 0, "send": 0}
+
+    class Gmail:
+        unread = True
+
+        def history_message_ids(self, cursor):
+            return ["m1"], "12"
+
+        def fetch_message(self, message_id):
+            labels = ["UNREAD"] if self.unread else []
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, labels)
+
+        def mark_read(self, message_id):
+            self.unread = False
+
+    class Matcher:
+        def matching_rules(self, message, rules):
+            return rules
+
+    class Runner:
+        def run(self, rule, message):
+            calls["run"] += 1
+            return TaskResult(rule.id, rule.name, True, "done")
+
+    class Notifier:
+        def send(self, text):
+            calls["send"] += 1
+            if calls["send"] == 1:
+                raise RuntimeError("telegram unavailable")
+
+    gmail = Gmail()
+    engine = WorkflowEngine(store, Matcher(), gmail, Runner(), Notifier(), "me@example.com")
+    worker = WorkflowWorker(store, gmail, engine)
+
+    first = PubSubMessage({"emailAddress": "me@example.com", "historyId": "12"})
+    worker.handle_message(first)
+    assert first.nacked is True
+    assert store.get_event("me@example.com", "m1")["status"].startswith("notification_pending:")
+
+    second = PubSubMessage({"emailAddress": "me@example.com", "historyId": "12"})
+    worker.handle_message(second)
+    assert second.acked is True
+    assert store.get_event("me@example.com", "m1")["status"] == "completed"
+    assert calls == {"run": 1, "send": 2}

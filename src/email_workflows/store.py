@@ -48,11 +48,25 @@ CREATE TABLE IF NOT EXISTS message_events (
 class Store:
     def __init__(self, path: str | Path):
         self.path = Path(path).expanduser()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.path.parent, 0o700)
+        if not self.path.exists():
+            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            os.close(descriptor)
+        os.chmod(self.path, 0o600)
+        self._repair_sidecar_permissions()
         self._lock = threading.RLock()
         with self._connect() as db:
             db.executescript(_SCHEMA)
+            db.execute("UPDATE message_events SET status='retryable' WHERE status='processing'")
         os.chmod(self.path, 0o600)
+        self._repair_sidecar_permissions()
+
+    def _repair_sidecar_permissions(self) -> None:
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(f"{self.path}{suffix}")
+            if sidecar.exists():
+                os.chmod(sidecar, 0o600)
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30)
@@ -153,6 +167,13 @@ class Store:
                 """INSERT OR IGNORE INTO message_events
                 (account_email,message_id,status,created_at,updated_at) VALUES (?,?,?,?,?)""",
                 (account_email, message_id, "processing", now, now),
+            )
+            if cur.rowcount == 1:
+                return True
+            cur = db.execute(
+                """UPDATE message_events SET status='processing',updated_at=?
+                WHERE account_email=? AND message_id=? AND status='retryable'""",
+                (now, account_email, message_id),
             )
             return cur.rowcount == 1
 
