@@ -100,6 +100,88 @@ def test_resource_lookup_propagates_permission_errors():
         raise AssertionError("expected permission error")
 
 
+class RecordingTopics(Topics):
+    """Fails the test if any topic API call is made."""
+
+    def get(self, **kwargs):
+        raise AssertionError("preprovisioned mode must not call topics.get")
+
+    def create(self, **kwargs):
+        raise AssertionError("preprovisioned mode must not create topics")
+
+    def getIamPolicy(self, **kwargs):
+        raise AssertionError("preprovisioned mode must not read IAM")
+
+    def setIamPolicy(self, **kwargs):
+        raise AssertionError("preprovisioned mode must not write IAM")
+
+
+def _preprovisioned_pubsub(subscriptions_cls):
+    pubsub = PubSub()
+    pubsub.topic_api = RecordingTopics()
+    pubsub.sub_api = subscriptions_cls()
+    pubsub.p = Projects(pubsub.topic_api, pubsub.sub_api)
+    return pubsub
+
+
+def test_preprovisioned_mode_validates_without_touching_topic_or_iam():
+    class ExistingSubscriptions(Subscriptions):
+        def get(self, **kwargs):
+            return Request({"topic": "projects/my-project/topics/gmail-events"})
+
+    pubsub = _preprovisioned_pubsub(ExistingSubscriptions)
+    result = GoogleSetup(pubsub).ensure_pubsub(
+        "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
+    )
+    assert result.topic == "projects/my-project/topics/gmail-events"
+    assert result.subscription == "projects/my-project/subscriptions/gmail-events-local"
+    assert pubsub.sub_api.created == []
+
+
+def test_preprovisioned_mode_rejects_subscription_on_wrong_topic():
+    class WrongTopicSubscriptions(Subscriptions):
+        def get(self, **kwargs):
+            return Request({"topic": "projects/my-project/topics/other"})
+
+    pubsub = _preprovisioned_pubsub(WrongTopicSubscriptions)
+    try:
+        GoogleSetup(pubsub).ensure_pubsub(
+            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
+        )
+    except RuntimeError as exc:
+        assert "topics/other" in str(exc)
+    else:
+        raise AssertionError("expected topic mismatch")
+
+
+def test_preprovisioned_mode_explains_missing_subscription():
+    pubsub = _preprovisioned_pubsub(Subscriptions)  # get() raises 404
+    try:
+        GoogleSetup(pubsub).ensure_pubsub(
+            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
+        )
+    except RuntimeError as exc:
+        assert "does not exist" in str(exc)
+    else:
+        raise AssertionError("expected missing-subscription error")
+
+
+def test_preprovisioned_mode_explains_permission_denial():
+    class DeniedSubscriptions(Subscriptions):
+        def get(self, **kwargs):
+            raise ApiError(403)
+
+    pubsub = _preprovisioned_pubsub(DeniedSubscriptions)
+    try:
+        GoogleSetup(pubsub).ensure_pubsub(
+            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
+        )
+    except RuntimeError as exc:
+        assert "roles/pubsub.subscriber" in str(exc)
+    else:
+        raise AssertionError("expected permission error")
+
+
 def test_existing_subscription_must_target_requested_topic():
     class ExistingTopics(Topics):
         def get(self, **kwargs):

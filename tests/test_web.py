@@ -119,6 +119,32 @@ def test_oauth_redirect_uses_configured_port(tmp_path: Path, monkeypatch):
     )
     assert response.status_code == 303
     assert store.get_setting("oauth_redirect_uri") == "http://127.0.0.1:9999/oauth/callback"
+    assert store.get_setting("pubsub_mode") == "provision"
+
+
+def test_settings_persist_preprovisioned_mode(tmp_path: Path, monkeypatch):
+    secret = tmp_path / "client.json"
+    secret.write_text('{"installed":{"project_id":"my-project"}}')
+    monkeypatch.setattr(
+        auth,
+        "begin_oauth",
+        lambda client_secret_path, redirect_uri: ("https://accounts.example/auth", "s", "v"),
+    )
+    store = Store(tmp_path / "app.db")
+    client = TestClient(create_app(store, start_worker=False))
+    response = client.post(
+        "/settings",
+        data={
+            "project_id": "my-project",
+            "client_secret_path": str(secret),
+            "topic_id": "gmail-events",
+            "subscription_id": "gmail-events-local",
+            "preprovisioned": "on",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert store.get_setting("pubsub_mode") == "preprovisioned"
 
 
 def test_rule_input_validation_rejects_blank_fields(tmp_path: Path):

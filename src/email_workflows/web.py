@@ -180,6 +180,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         client_secret_path: str = Form(...),
         topic_id: str = Form("hermes-email-events"),
         subscription_id: str = Form("hermes-email-workflows-local"),
+        preprovisioned: str | None = Form(None),
     ):
         from .auth import begin_oauth, oauth_client_project
 
@@ -207,6 +208,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
             "client_secret_path": client_secret_path,
             "topic_id": topic_id.strip(),
             "subscription_id": subscription_id.strip(),
+            "pubsub_mode": "preprovisioned" if preprovisioned == "on" else "provision",
             "oauth_state": state,
             "oauth_code_verifier": verifier,
             "oauth_redirect_uri": redirect_uri,
@@ -239,6 +241,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
             store.get_setting("topic_id", "hermes-email-events") or "hermes-email-events",
             store.get_setting("subscription_id", "hermes-email-workflows-local")
             or "hermes-email-workflows-local",
+            preprovisioned=store.get_setting("pubsub_mode", "") == "preprovisioned",
         )
         gmail = GmailClient(gmail_service)
         profile = gmail.profile()
