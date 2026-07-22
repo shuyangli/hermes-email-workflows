@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import signal
 import subprocess
 from collections.abc import Callable
@@ -13,14 +12,14 @@ from string import Template
 from .models import EmailMessage, Rule, TaskResult
 
 Executor = Callable[[list[str], int], tuple[int, str, str]]
-SAFE_CAPABILITY = re.compile(r"^[A-Za-z0-9_.:-]+$")
+ALLOWED_TOOLSETS = {"web", "vision"}
 
 
 def _execute(argv: list[str], timeout: int) -> tuple[int, str, str]:
     workdir = Path(
         os.environ.get("HEW_TASK_WORKDIR", "~/.local/share/hermes-email-workflows/task-workdir")
     ).expanduser()
-    workdir.mkdir(parents=True, exist_ok=True)
+    workdir.mkdir(parents=True, exist_ok=True, mode=0o700)
     env = os.environ.copy()
     for unsafe_name in ("PYTHONPATH", "PYTHONHOME", "BASH_ENV", "ENV"):
         env.pop(unsafe_name, None)
@@ -53,15 +52,22 @@ class HermesRunner:
         self.execute = execute
 
     def run(self, rule: Rule, message: EmailMessage) -> TaskResult:
-        for label, value in (("toolset", rule.toolsets), ("skill", rule.skills)):
-            entries = [item.strip() for item in value.split(",") if item.strip()]
-            if any(item.startswith("-") or not SAFE_CAPABILITY.fullmatch(item) for item in entries):
-                return TaskResult(
-                    rule.id,
-                    rule.name,
-                    False,
-                    f"Invalid {label} list; only capability names are allowed",
-                )
+        toolsets = [item.strip() for item in rule.toolsets.split(",") if item.strip()] or ["web"]
+        skills = [item.strip() for item in rule.skills.split(",") if item.strip()]
+        if any(item not in ALLOWED_TOOLSETS for item in toolsets):
+            return TaskResult(
+                rule.id,
+                rule.name,
+                False,
+                f"Invalid toolset; allowed: {', '.join(sorted(ALLOWED_TOOLSETS))}",
+            )
+        if skills:
+            return TaskResult(
+                rule.id,
+                rule.name,
+                False,
+                "Skills are disabled for untrusted email workflows",
+            )
         rendered = Template(rule.prompt_template).safe_substitute(
             from_=message.sender,
             sender=message.sender,
@@ -88,11 +94,11 @@ class HermesRunner:
             "email-workflow",
             "--max-turns",
             "45",
+            "--safe-mode",
         ]
-        if rule.toolsets.strip():
-            argv.extend(["--toolsets", rule.toolsets.strip()])
-        if rule.skills.strip():
-            argv.extend(["--skills", rule.skills.strip()])
+        argv.extend(["--toolsets", ",".join(toolsets)])
+        if skills:
+            argv.extend(["--skills", ",".join(skills)])
         try:
             code, stdout, stderr = self.execute(argv, rule.timeout_seconds)
         except (subprocess.TimeoutExpired, TimeoutError):

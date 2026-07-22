@@ -28,6 +28,7 @@ The service never replies by email. It runs on `127.0.0.1`, keeps credentials an
 - Hermes Agent configured with a Telegram home channel
 - A Google Cloud project where you can manage Pub/Sub resources
 - An OAuth Desktop client JSON from that same project
+- Google Cloud Application Default Credentials (ADC) for Pub/Sub administration/subscription
 
 Gmail requires the Pub/Sub topic to live in the same Google Cloud project as the OAuth client used for the Gmail API call.
 
@@ -39,12 +40,21 @@ For the OAuth client's project:
 2. Configure the OAuth consent screen.
 3. If the app is in Testing, add every Gmail account you may connect as a test user.
 4. Create an OAuth client with application type **Desktop app** and download its JSON file.
-5. Ensure the signing-in Google account can create Pub/Sub topics/subscriptions and edit topic IAM policy. Project Owner or Pub/Sub Admin plus permission to set IAM policy is sufficient.
+5. Configure separate Cloud credentials and ensure that principal can create Pub/Sub topics/subscriptions and edit topic IAM policy. Project Owner or Pub/Sub Admin plus permission to set IAM policy is sufficient.
 
-The dashboard requests only:
+For local user credentials:
+
+```bash
+gcloud auth application-default login
+```
+
+Alternatively, set `GOOGLE_APPLICATION_CREDENTIALS` to a least-privilege service-account JSON path. The Gmail OAuth refresh token is deliberately not granted Pub/Sub authority.
+
+The dashboard's Gmail OAuth flow requests only:
 
 - `gmail.modify` — fetch messages and remove the `UNREAD` label after a match
-- `pubsub` — create/use the local pull subscription
+
+ADC separately supplies the Pub/Sub credentials used to provision and consume the pull subscription.
 
 During setup the app creates a topic and pull subscription, then grants
 `gmail-api-push@system.gserviceaccount.com` the `roles/pubsub.publisher` role on the topic, as required by Gmail push notifications.
@@ -72,6 +82,8 @@ For this machine, Python 3.11 is available at:
 ```
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787), select **Setup**, enter the Google Cloud project and OAuth client JSON path, and approve Google OAuth.
+
+Set `HEW_PORT` before launching to use a different local port; the OAuth redirect URI follows that setting.
 
 The default client path is `~/.hermes/google_client_secret.json`. The existing client's project is `shuyangli-claw`.
 
@@ -108,7 +120,7 @@ Each rule has:
 - **Hermes prompt template** — the task passed to a fresh Hermes session
 - **Priority** — lower values execute first
 - **Timeout** — maximum runtime for that Hermes task
-- **Toolsets / skills** — comma-separated Hermes capabilities to preload; toolsets default to read-only `web` rather than the full CLI tool set
+- **Toolsets** — toolsets default to `web` and are restricted to `web` or `vision`; terminal, filesystem, computer-control, skills, and other ambient or side-effecting capabilities are rejected.
 - **Account restriction** — optional; blank rules apply to whichever account is active
 
 Available prompt variables:
@@ -133,7 +145,7 @@ Body:
 ${body}
 ```
 
-Email content is wrapped as untrusted data before it reaches Hermes. Keep toolsets narrow for rules that process mail from external senders.
+Email content is wrapped as untrusted data before it reaches Hermes. Each execution uses Hermes safe mode, which disables ambient memory, plugins, MCP servers, user configuration, and repository rule files, and receives only an explicitly allowed toolset.
 
 ## Data and credentials
 
@@ -144,7 +156,7 @@ Nothing sensitive is stored in the repository.
 ~/.local/share/hermes-email-workflows/google-token.json  OAuth token, mode 0600
 ```
 
-The app binds only to `127.0.0.1:8787`.
+The app binds only to `127.0.0.1:8787`, rejects untrusted Host headers, and rejects cross-origin mutating browser requests.
 
 ## Development
 
@@ -167,3 +179,5 @@ curl http://127.0.0.1:8787/healthz
 - The combined Telegram notification is persisted before delivery. A delivery retry does not rerun completed Hermes tasks.
 - Task failures are included in the combined Telegram notification instead of preventing other matched rules from running.
 - The Gmail history cursor advances only after all messages in the notification are handled.
+- A ten-minute safety scan recovers from dropped Pub/Sub notifications.
+- An expired Gmail history cursor creates a new watch boundary and reconciles currently unread inbox messages against the durable message-ID ledger.

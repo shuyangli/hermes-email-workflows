@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import PlainTextResponse
 
 from .models import Rule
 from .store import Store
@@ -18,6 +22,14 @@ PACKAGE_DIR = Path(__file__).parent
 DEFAULT_DATA_DIR = Path(
     os.environ.get("HEW_DATA_DIR", "~/.local/share/hermes-email-workflows")
 ).expanduser()
+RESOURCE_ID = re.compile(r"^[a-z][a-z0-9-]{2,254}$")
+
+
+def _validate_rule(name: str, gmail_query: str, prompt_template: str, timeout: int) -> None:
+    if not name.strip() or not gmail_query.strip() or not prompt_template.strip():
+        raise HTTPException(400, "Name, Gmail query, and prompt are required")
+    if not 1 <= timeout <= 1800:
+        raise HTTPException(400, "Timeout must be between 1 and 1800 seconds")
 
 
 def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI:
@@ -37,6 +49,24 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
             worker.stop()
 
     app = FastAPI(title="Hermes Email Workflows", lifespan=lifespan)
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+    )
+
+    @app.middleware("http")
+    async def reject_cross_origin_mutations(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+                return PlainTextResponse("Cross-origin request rejected", status_code=403)
+            source = request.headers.get("origin") or request.headers.get("referer")
+            if source:
+                parsed = urlsplit(source)
+                request_host = request.headers.get("host", "").lower()
+                if parsed.scheme != request.url.scheme or parsed.netloc.lower() != request_host:
+                    return PlainTextResponse("Cross-origin request rejected", status_code=403)
+        return await call_next(request)
+
     templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
     app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
     app.state.store = store
@@ -80,6 +110,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         skills: str = Form(""),
         timeout_seconds: int = Form(300),
     ):
+        _validate_rule(name, gmail_query, prompt_template, timeout_seconds)
         store.create_rule(
             Rule(
                 None,
@@ -89,7 +120,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
                 enabled=enabled == "on",
                 priority=priority,
                 account_email=account_email.strip() or None,
-                toolsets=toolsets.strip(),
+                toolsets=toolsets.strip() or "web",
                 skills=skills.strip(),
                 timeout_seconds=timeout_seconds,
             )
@@ -109,6 +140,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         skills: str = Form(""),
         timeout_seconds: int = Form(300),
     ):
+        _validate_rule(name, gmail_query, prompt_template, timeout_seconds)
         store.update_rule(
             Rule(
                 rule_id,
@@ -118,7 +150,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
                 enabled=enabled == "on",
                 priority=priority,
                 account_email=account_email.strip() or None,
-                toolsets=toolsets.strip(),
+                toolsets=toolsets.strip() or "web",
                 skills=skills.strip(),
                 timeout_seconds=timeout_seconds,
             )
@@ -145,6 +177,13 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
     ):
         from .auth import begin_oauth, oauth_client_project
 
+        if not RESOURCE_ID.fullmatch(project_id.strip()):
+            raise HTTPException(400, "Invalid Google Cloud project ID")
+        if not RESOURCE_ID.fullmatch(topic_id.strip()) or not RESOURCE_ID.fullmatch(
+            subscription_id.strip()
+        ):
+            raise HTTPException(400, "Invalid Pub/Sub topic or subscription ID")
+
         client_secret_path = str(Path(client_secret_path).expanduser())
         if not Path(client_secret_path).exists():
             raise HTTPException(400, "OAuth client JSON does not exist")
@@ -155,7 +194,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
                 "Gmail watch requires the Pub/Sub topic to use the OAuth client's "
                 f"project: {client_project}",
             )
-        redirect_uri = "http://127.0.0.1:8787/oauth/callback"
+        redirect_uri = f"http://127.0.0.1:{int(os.environ.get('HEW_PORT', '8787'))}/oauth/callback"
         auth_url, state, verifier = begin_oauth(client_secret_path, redirect_uri)
         for key, value in {
             "project_id": project_id.strip(),
@@ -197,10 +236,16 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         )
         gmail = GmailClient(gmail_service)
         profile = gmail.profile()
+        account_email = profile["emailAddress"]
+        # Establish a baseline so reconnecting does not treat an existing unread backlog
+        # as newly delivered mail during a later stale-history reconciliation.
+        for message_id in gmail.unread_inbox_message_ids():
+            if store.claim_message(account_email, message_id):
+                store.finish_message(account_email, message_id, "baseline_ignored", [], "")
         watch = gmail.start_watch(resources.topic)
         for key, value in {
             "token_path": str(token_path),
-            "account_email": profile["emailAddress"],
+            "account_email": account_email,
             "history_id": str(watch["historyId"]),
             "watch_expiration": str(watch["expiration"]),
             "topic_path": resources.topic,

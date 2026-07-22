@@ -42,6 +42,26 @@ class GmailClient:
             userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
         ).execute()
 
+    def unread_inbox_message_ids(self) -> list[str]:
+        request = (
+            self.service.users()
+            .messages()
+            .list(userId="me", q="in:inbox is:unread", maxResults=500)
+        )
+        ids: list[str] = []
+        while request is not None:
+            response = request.execute()
+            ids.extend(item["id"] for item in response.get("messages", []) if item.get("id"))
+            token = response.get("nextPageToken")
+            if not token:
+                break
+            request = (
+                self.service.users()
+                .messages()
+                .list(userId="me", q="in:inbox is:unread", maxResults=500, pageToken=token)
+            )
+        return ids
+
     def start_watch(self, topic_path: str) -> dict:
         return (
             self.service.users()

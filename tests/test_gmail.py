@@ -42,6 +42,9 @@ class Messages:
         self.modified.append(kwargs)
         return Request({"id": kwargs["id"]})
 
+    def list(self, **kwargs):
+        return Request({"messages": [{"id": "m1"}, {"id": "m2"}]})
+
 
 class History:
     def list(self, **kwargs):
@@ -101,3 +104,7 @@ def test_history_message_ids_are_deduplicated_and_cursor_returned():
     ids, cursor = GmailClient(Service()).history_message_ids("10")
     assert ids == ["m1", "m2"]
     assert cursor == "12"
+
+
+def test_lists_current_unread_inbox_messages():
+    assert GmailClient(Service()).unread_inbox_message_ids() == ["m1", "m2"]

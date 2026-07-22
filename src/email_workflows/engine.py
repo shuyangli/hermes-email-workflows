@@ -21,42 +21,52 @@ class WorkflowEngine:
                 if hasattr(self.store, "get_event")
                 else None
             )
-            if event and event["status"] == "notification_pending":
+            if event and event["status"].startswith("notification_pending:"):
                 notification = event["notification"]
                 self.notifier.send(notification)
                 rule_ids = __import__("json").loads(event["matched_rule_ids"])
+                final_status = event["status"].split(":", 1)[1]
                 self.store.finish_message(
                     self.account_email,
                     message.gmail_id,
-                    "completed",
+                    final_status,
                     rule_ids,
                     notification,
                 )
-                return ProcessResult("completed", message.gmail_id, rule_ids, notification)
+                return ProcessResult(final_status, message.gmail_id, rule_ids, notification)
             return ProcessResult("duplicate", message.gmail_id)
 
-        matched = self.matcher.matching_rules(message, rules)
-        rule_ids = [rule.id for rule in matched if rule.id is not None]
-        if not matched:
-            self.store.finish_message(self.account_email, message.gmail_id, "unmatched", [], "")
-            return ProcessResult("unmatched", message.gmail_id)
+        rule_ids: list[int] = []
+        notification = ""
+        try:
+            matched = self.matcher.matching_rules(message, rules)
+            rule_ids = [rule.id for rule in matched if rule.id is not None]
+            if not matched:
+                self.store.finish_message(self.account_email, message.gmail_id, "unmatched", [], "")
+                return ProcessResult("unmatched", message.gmail_id)
 
-        # User-selected semantic: once any rule matches, mark read before task execution.
-        self.gmail.mark_read(message.gmail_id)
-        results = [self.runner.run(rule, message) for rule in matched]
-        notification = self._format_notification(message, results)
-        status = (
-            "completed" if all(result.success for result in results) else "completed_with_errors"
-        )
-        # Persist the complete notification before delivery. A Pub/Sub redelivery can then
-        # retry Telegram without re-running Hermes tasks that may have external side effects.
-        self.store.finish_message(
-            self.account_email,
-            message.gmail_id,
-            "notification_pending",
-            rule_ids,
-            notification,
-        )
+            # User-selected semantic: once any rule matches, mark read before task execution.
+            self.gmail.mark_read(message.gmail_id)
+            results = [self.runner.run(rule, message) for rule in matched]
+            notification = self._format_notification(message, results)
+            status = (
+                "completed"
+                if all(result.success for result in results)
+                else "completed_with_errors"
+            )
+            # Persist before delivery so Telegram can retry without rerunning Hermes tasks.
+            self.store.finish_message(
+                self.account_email,
+                message.gmail_id,
+                f"notification_pending:{status}",
+                rule_ids,
+                notification,
+            )
+        except Exception:
+            self.store.finish_message(
+                self.account_email, message.gmail_id, "retryable", rule_ids, notification
+            )
+            raise
         self.notifier.send(notification)
         self.store.finish_message(
             self.account_email, message.gmail_id, status, rule_ids, notification

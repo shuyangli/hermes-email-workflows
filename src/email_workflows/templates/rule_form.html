@@ -8,8 +8,9 @@
 <p class="hint">Uses Gmail’s search syntax. Each new email is tested against every active rule.</p>
 <label>Hermes prompt<textarea name="prompt_template" required rows="10" placeholder="Summarize this invoice: ${body}">{{ rule.prompt_template if rule else '' }}</textarea></label>
 <p class="hint">Variables: <code>${sender}</code>, <code>${to}</code>, <code>${subject}</code>, <code>${body}</code>, <code>${gmail_id}</code>, <code>${thread_id}</code>.</p>
-<div class="row"><label>Priority<input type="number" name="priority" value="{{ rule.priority if rule else 100 }}"></label><label>Timeout seconds<input type="number" min="10" max="3600" name="timeout_seconds" value="{{ rule.timeout_seconds if rule else 300 }}"></label></div>
-<div class="row"><label>Hermes toolsets<input name="toolsets" value="{{ rule.toolsets if rule else 'web' }}" placeholder="web"></label><label>Hermes skills<input name="skills" value="{{ rule.skills if rule else '' }}" placeholder="google-workspace"></label></div>
+<div class="row"><label>Priority<input type="number" name="priority" value="{{ rule.priority if rule else 100 }}"></label><label>Timeout seconds<input type="number" min="1" max="1800" name="timeout_seconds" value="{{ rule.timeout_seconds if rule else 300 }}"></label></div>
+<label>Hermes toolset<input name="toolsets" value="{{ rule.toolsets if rule else 'web' }}" placeholder="web"></label>
+<p class="hint">Security boundary: only <code>web</code> and <code>vision</code> are accepted. Skills and local/side-effecting tools are disabled.</p>
 <label>Account restriction<input name="account_email" value="{{ rule.account_email if rule and rule.account_email else '' }}" placeholder="Blank = any connected account"></label>
 <label class="check"><input type="checkbox" name="enabled" {% if not rule or rule.enabled %}checked{% endif %}> Enabled</label>
 <div class="actions"><button class="button" type="submit">Save rule</button><a href="/">Cancel</a></div>
