@@ -142,6 +142,7 @@ The setup form has a "Resources are pre-provisioned" checkbox. When checked, the
 
 - uses the configured topic and subscription without creating them;
 - performs no IAM reads or writes;
-- validates only that the subscription exists and is attached to the configured topic (a subscriber-only credential cannot read the topic itself).
+- performs no subscription or topic metadata reads, because a consume-only identity cannot call `pubsub.subscriptions.get`;
+- trusts the resource paths supplied by the operator, so provisioning must verify that the subscription exists and is attached to the configured topic before setup.
 
-With the checkbox enabled, the least-privilege runtime identity (`roles/pubsub.subscriber` on the subscription only) is sufficient to complete OAuth setup. Leave it unchecked only when the local Application Default Credentials are intentionally privileged enough to create resources and administer topic IAM — the historical behavior, which re-writes topic IAM on every reconnect.
+With the checkbox enabled, a runtime identity with `pubsub.subscriptions.consume` on the subscription is sufficient to complete OAuth setup and run the subscriber. Leave it unchecked only when the local Application Default Credentials are intentionally privileged enough to create resources and administer topic IAM — the historical behavior, which re-writes topic IAM on every reconnect.

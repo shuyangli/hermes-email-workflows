@@ -82,6 +82,88 @@ def test_unmatched_email_is_not_marked_read_or_notified():
     assert result.status == "unmatched"
 
 
+def test_exact_no_notification_result_completes_silently():
+    events: list[str] = []
+
+    class Store:
+        def claim_message(self, account, message_id):
+            return True
+
+        def finish_message(self, account, message_id, status, matched_rule_ids, notification):
+            events.append(f"finished:{status}:{notification}")
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            events.append("read")
+
+    class Runner:
+        def run(self, rule, message):
+            return TaskResult(rule.id, rule.name, True, "NO_NOTIFICATION")
+
+    class Notifier:
+        def send(self, text):
+            raise AssertionError("silent result must not notify")
+
+    email = EmailMessage("m1", "t1", "<a@b>", "a", "b", "s", "body", 1)
+    rule = Rule(id=1, name="conditional", gmail_query="from:a", prompt_template="x")
+
+    result = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), Notifier(), "me").process(
+        email, [rule]
+    )
+
+    assert result.status == "completed_silent"
+    assert result.matched_rule_ids == [1]
+    assert result.notification == ""
+    assert events == ["read", "finished:completed_silent:"]
+
+
+def test_silent_result_is_omitted_when_another_rule_has_output():
+    class Store:
+        def claim_message(self, account, message_id):
+            return True
+
+        def finish_message(self, account, message_id, status, matched_rule_ids, notification):
+            self.status = status
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            pass
+
+    class Runner:
+        def run(self, rule, message):
+            output = "NO_NOTIFICATION" if rule.name == "silent" else "Buy this bottle"
+            return TaskResult(rule.id, rule.name, True, output)
+
+    class Notifier:
+        def send(self, text):
+            self.text = text
+
+    email = EmailMessage("m1", "t1", "<a@b>", "a", "b", "s", "body", 1)
+    rules = [
+        Rule(id=1, name="silent", gmail_query="from:a", prompt_template="x"),
+        Rule(id=2, name="visible", gmail_query="from:a", prompt_template="x"),
+    ]
+    notifier = Notifier()
+
+    result = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), notifier, "me").process(
+        email, rules
+    )
+
+    assert result.status == "completed"
+    assert "Buy this bottle" in notifier.text
+    assert "visible" in notifier.text
+    assert "silent" not in notifier.text
+    assert "NO_NOTIFICATION" not in notifier.text
+
+
 def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
     # Simulates Gmail's search index catching up: the message was recorded ``unmatched``,
     # a rule now matches, and the safety sweep (allow_rematch=True) reprocesses it.
