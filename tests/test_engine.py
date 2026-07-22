@@ -82,6 +82,74 @@ def test_unmatched_email_is_not_marked_read_or_notified():
     assert result.status == "unmatched"
 
 
+def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
+    # Simulates Gmail's search index catching up: the message was recorded ``unmatched``,
+    # a rule now matches, and the safety sweep (allow_rematch=True) reprocesses it.
+    events: list[str] = []
+
+    class Store:
+        def claim_message(self, account, message_id):
+            return False
+
+        def get_event(self, account, message_id):
+            return {"status": "unmatched", "matched_rule_ids": "[]", "notification": ""}
+
+        def claim_for_rematch(self, account, message_id, within_seconds):
+            events.append("reclaimed")
+            return True
+
+        def finish_message(self, account, message_id, status, matched_rule_ids, notification):
+            events.append(f"finished:{status}")
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            events.append("read")
+
+    class Runner:
+        def run(self, rule, message):
+            return TaskResult(rule.id, rule.name, True, "ok")
+
+    class Notifier:
+        def send(self, text):
+            events.append("sent")
+
+    email = EmailMessage("m1", "t1", "<a@b>", "a", "b", "s", "body", 1)
+    rules = [Rule(id=1, name="late", gmail_query="from:a", prompt_template="x")]
+    engine = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), Notifier(), "me")
+
+    result = engine.process(email, rules, allow_rematch=True)
+
+    assert result.status == "completed"
+    assert events == ["reclaimed", "read", "finished:notification_pending:completed", "sent",
+                      "finished:completed"]
+
+
+def test_unmatched_message_is_not_re_evaluated_without_rematch():
+    class Store:
+        def claim_message(self, account, message_id):
+            return False
+
+        def get_event(self, account, message_id):
+            return {"status": "unmatched", "matched_rule_ids": "[]", "notification": ""}
+
+        def claim_for_rematch(self, account, message_id, within_seconds):
+            raise AssertionError("must not reclaim without allow_rematch")
+
+    class Never:
+        def __getattr__(self, name):
+            raise AssertionError("must stop before matching")
+
+    email = EmailMessage("m1", "t1", None, "a", "b", "s", "body", 1)
+    result = WorkflowEngine(Store(), Never(), Never(), Never(), Never(), "me").process(
+        email, [Rule(id=1, name="x", gmail_query="from:a", prompt_template="x")]
+    )
+    assert result.status == "duplicate"
+
+
 def test_duplicate_message_is_skipped():
     class Store:
         def claim_message(self, account, message_id):

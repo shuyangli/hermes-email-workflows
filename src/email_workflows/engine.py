@@ -6,6 +6,10 @@ from .models import EmailMessage, ProcessResult, Rule, TaskResult
 
 
 class WorkflowEngine:
+    # Window during which an ``unmatched`` message stays eligible for re-evaluation, to
+    # absorb Gmail search-index lag and rules added shortly after the message arrived.
+    REMATCH_WINDOW_SECONDS = 60 * 60
+
     def __init__(self, store, matcher, gmail, runner, notifier, account_email: str):
         self.store = store
         self.matcher = matcher
@@ -14,7 +18,9 @@ class WorkflowEngine:
         self.notifier = notifier
         self.account_email = account_email
 
-    def process(self, message: EmailMessage, rules: list[Rule]) -> ProcessResult:
+    def process(
+        self, message: EmailMessage, rules: list[Rule], allow_rematch: bool = False
+    ) -> ProcessResult:
         if not self.store.claim_message(self.account_email, message.gmail_id):
             event = (
                 self.store.get_event(self.account_email, message.gmail_id)
@@ -34,7 +40,17 @@ class WorkflowEngine:
                     notification,
                 )
                 return ProcessResult(final_status, message.gmail_id, rule_ids, notification)
-            return ProcessResult("duplicate", message.gmail_id)
+            reclaimed = (
+                allow_rematch
+                and event
+                and event["status"] == "unmatched"
+                and hasattr(self.store, "claim_for_rematch")
+                and self.store.claim_for_rematch(
+                    self.account_email, message.gmail_id, self.REMATCH_WINDOW_SECONDS
+                )
+            )
+            if not reclaimed:
+                return ProcessResult("duplicate", message.gmail_id)
 
         rule_ids: list[int] = []
         notification = ""

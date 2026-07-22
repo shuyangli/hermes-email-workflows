@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -13,6 +14,12 @@ from .models import EmailMessage, Rule, TaskResult
 
 Executor = Callable[[list[str], int], tuple[int, str, str]]
 ALLOWED_TOOLSETS = {"web", "vision"}
+
+
+def _kill_group(process: subprocess.Popen, sig: int) -> None:
+    """Signal the child's process group, tolerating a child that already exited."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, sig)
 
 
 def _execute(argv: list[str], timeout: int) -> tuple[int, str, str]:
@@ -36,12 +43,15 @@ def _execute(argv: list[str], timeout: int) -> tuple[int, str, str]:
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGTERM)
+        _kill_group(process, signal.SIGTERM)
         try:
             process.communicate(timeout=3)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
+            _kill_group(process, signal.SIGKILL)
+            # Bounded: a grandchild that escaped the process group (its own setsid)
+            # could otherwise hold the pipes open and block reaping indefinitely.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.communicate(timeout=5)
         raise
     max_output = 64_000
     return process.returncode, stdout.strip()[:max_output], stderr.strip()[:max_output]
