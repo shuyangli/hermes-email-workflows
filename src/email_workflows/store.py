@@ -177,9 +177,7 @@ class Store:
             )
             return cur.rowcount == 1
 
-    def claim_for_rematch(
-        self, account_email: str, message_id: str, within_seconds: int
-    ) -> bool:
+    def claim_for_rematch(self, account_email: str, message_id: str, within_seconds: int) -> bool:
         """Re-claim a recently-``unmatched`` message so it can be re-evaluated.
 
         Gmail's search index (used by the rule matcher) is eventually consistent and can
