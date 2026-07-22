@@ -48,6 +48,44 @@ def test_restart_recovers_interrupted_processing_claim(tmp_path: Path):
     assert restarted.claim_message("me@example.com", "m1") is True
 
 
+def test_resumable_message_ids_returns_mid_flight_messages(tmp_path: Path):
+    store = Store(tmp_path / "app.db")
+    account = "me@example.com"
+    # A retryable message (task failed) and a notification-pending message (task ran,
+    # delivery not confirmed) are both already marked read, so recovery must find them.
+    store.claim_message(account, "retry")
+    store.finish_message(account, "retry", "retryable", [1], "")
+    store.claim_message(account, "pending")
+    store.finish_message(account, "pending", "notification_pending:completed", [2], "note")
+    store.claim_message(account, "done")
+    store.finish_message(account, "done", "completed", [3], "note")
+    store.claim_message(account, "nope")
+    store.finish_message(account, "nope", "unmatched", [], "")
+
+    assert set(store.resumable_message_ids(account)) == {"retry", "pending"}
+
+
+def test_claim_for_rematch_only_reclaims_recent_unmatched(tmp_path: Path):
+    store = Store(tmp_path / "app.db")
+    account = "me@example.com"
+    store.claim_message(account, "fresh")
+    store.finish_message(account, "fresh", "unmatched", [], "")
+
+    # Recent unmatched → reclaimable for re-evaluation.
+    assert store.claim_for_rematch(account, "fresh", within_seconds=3600) is True
+    assert store.get_event(account, "fresh")["status"] == "processing"
+
+    # A completed message is never reclaimed for re-match.
+    store.claim_message(account, "done")
+    store.finish_message(account, "done", "completed", [1], "note")
+    assert store.claim_for_rematch(account, "done", within_seconds=3600) is False
+
+    # Outside the recency window (window=0) an unmatched message is not reclaimed.
+    store.claim_message(account, "stale")
+    store.finish_message(account, "stale", "unmatched", [], "")
+    assert store.claim_for_rematch(account, "stale", within_seconds=0) is False
+
+
 def test_existing_data_permissions_are_repaired(tmp_path: Path):
     directory = tmp_path / "data"
     directory.mkdir(mode=0o755)

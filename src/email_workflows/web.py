@@ -37,7 +37,6 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        worker = None
         if start_worker:
             from .worker import WorkflowWorker
 
@@ -45,6 +44,10 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
             worker.start_if_configured()
             app.state.worker = worker
         yield
+        # Read the live worker off app.state: the OAuth callback may have replaced the
+        # startup worker with a freshly configured one, and that is the instance holding
+        # the open subscriber and background threads that must be stopped.
+        worker = getattr(app.state, "worker", None)
         if worker:
             worker.stop()
 
@@ -141,20 +144,23 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         timeout_seconds: int = Form(300),
     ):
         _validate_rule(name, gmail_query, prompt_template, timeout_seconds)
-        store.update_rule(
-            Rule(
-                rule_id,
-                name.strip(),
-                gmail_query.strip(),
-                prompt_template,
-                enabled=enabled == "on",
-                priority=priority,
-                account_email=account_email.strip() or None,
-                toolsets=toolsets.strip() or "web",
-                skills=skills.strip(),
-                timeout_seconds=timeout_seconds,
+        try:
+            store.update_rule(
+                Rule(
+                    rule_id,
+                    name.strip(),
+                    gmail_query.strip(),
+                    prompt_template,
+                    enabled=enabled == "on",
+                    priority=priority,
+                    account_email=account_email.strip() or None,
+                    toolsets=toolsets.strip() or "web",
+                    skills=skills.strip(),
+                    timeout_seconds=timeout_seconds,
+                )
             )
-        )
+        except KeyError as exc:
+            raise HTTPException(404, "Rule not found") from exc
         return RedirectResponse("/", status_code=303)
 
     @app.post("/rules/{rule_id}/delete")

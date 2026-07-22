@@ -21,6 +21,39 @@ class PubSubMessage:
         self.nacked = True
 
 
+def test_recovery_redrives_read_but_incomplete_messages(tmp_path):
+    # A message left `retryable` was already marked read, so it never appears in the unread
+    # inbox. Stale-history recovery must still re-drive it (regression: previously abandoned).
+    store = Store(tmp_path / "app.db")
+    account = "me@example.com"
+    store.set_setting("account_email", account)
+    store.set_setting("topic_path", "projects/p/topics/t")
+    store.claim_message(account, "stuck")
+    store.finish_message(account, "stuck", "retryable", [1], "")
+
+    processed: list[str] = []
+
+    class Gmail:
+        def start_watch(self, topic):
+            return {"historyId": "99", "expiration": "1"}
+
+        def unread_inbox_message_ids(self):
+            return ["fresh"]  # note: "stuck" is read, absent here
+
+        def fetch_message(self, message_id):
+            labels = ["UNREAD"] if message_id == "fresh" else []
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, labels)
+
+    class Engine:
+        def process(self, message, rules, allow_rematch=False):
+            processed.append(message.gmail_id)
+
+    worker = WorkflowWorker(store, Gmail(), Engine())
+    worker._recover_stale_history(account)
+
+    assert "stuck" in processed and "fresh" in processed
+
+
 def test_pubsub_notification_processes_each_new_unread_message_and_advances_cursor():
     class Store:
         values = {"account_email": "me@example.com", "history_id": "10"}
@@ -46,7 +79,7 @@ def test_pubsub_notification_processes_each_new_unread_message_and_advances_curs
         def __init__(self):
             self.processed = []
 
-        def process(self, message, rules):
+        def process(self, message, rules, allow_rematch=False):
             self.processed.append(message.gmail_id)
 
     store, engine = Store(), Engine()
@@ -131,7 +164,7 @@ def test_stale_history_recovers_from_current_unread_mail():
     class Engine:
         processed = []
 
-        def process(self, message, rules):
+        def process(self, message, rules, allow_rematch=False):
             self.processed.append(message.gmail_id)
 
     store, engine = Store(), Engine()

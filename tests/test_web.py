@@ -36,6 +36,22 @@ def test_dashboard_creates_and_lists_rule(tmp_path: Path):
     assert "from:billing@example.com is:unread" in page.text
 
 
+def test_updating_a_missing_rule_returns_404(tmp_path: Path):
+    client = TestClient(create_app(store=Store(tmp_path / "app.db"), start_worker=False))
+    response = client.post(
+        "/rules/999",
+        data={
+            "name": "Ghost",
+            "gmail_query": "from:a",
+            "prompt_template": "x",
+            "priority": "10",
+            "timeout_seconds": "120",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 404
+
+
 def test_health_endpoint_reports_configuration_state(tmp_path: Path):
     app = create_app(store=Store(tmp_path / "app.db"), start_worker=False)
     response = TestClient(app).get("/healthz")

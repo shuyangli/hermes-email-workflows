@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 from .models import EmailMessage, Rule
+
+# A legitimate RFC 5322 message-id contains no whitespace and none of the characters that
+# would let a sender break out of the ``rfc822msgid:`` operator into a fresh Gmail search
+# clause. Anything else is treated as absent so a crafted ``Message-ID`` header cannot
+# widen a rule's query (e.g. injecting ``... is:unread OR label:inbox``).
+_SAFE_RFC822_MSGID = re.compile(r"^[^\s\"'()<>]+$")
 
 
 class GmailQueryMatcher:
@@ -46,8 +54,8 @@ class GmailQueryMatcher:
 
     @staticmethod
     def _scoped_query(message: EmailMessage, gmail_query: str) -> str:
-        if message.rfc822_message_id:
-            message_id = message.rfc822_message_id.strip().strip("<>")
+        message_id = (message.rfc822_message_id or "").strip().strip("<>")
+        if message_id and _SAFE_RFC822_MSGID.fullmatch(message_id):
             return f"({gmail_query}) rfc822msgid:{message_id} is:unread"
         seconds = max(message.internal_date_ms // 1000, 1)
         return f"({gmail_query}) after:{seconds - 86400} before:{seconds + 86400} is:unread"

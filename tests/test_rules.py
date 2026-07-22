@@ -81,3 +81,28 @@ def test_disabled_rules_are_not_evaluated():
 
     assert matcher.matching_rules(email, rules) == []
     assert messages.queries == []
+
+
+def test_crafted_message_id_cannot_widen_the_rule_query():
+    # A sender-controlled Message-ID that tries to inject an OR clause must not reach the
+    # query verbatim; the matcher falls back to the date-window scope instead.
+    email = EmailMessage(
+        gmail_id="m-1",
+        thread_id="t-1",
+        rfc822_message_id="<x> is:unread OR label:inbox",
+        sender="attacker@evil.example",
+        recipients="me@example.com",
+        subject="Hi",
+        body="body",
+        internal_date_ms=1_700_000_000_000,
+    )
+    scoped = GmailQueryMatcher._scoped_query(email, "from:trusted@example.com")
+    assert "OR label:inbox" not in scoped
+    assert "rfc822msgid:" not in scoped
+    assert "after:" in scoped and "before:" in scoped
+
+
+def test_clean_message_id_still_uses_rfc822msgid_scope():
+    email = EmailMessage("m-1", "t-1", "<abc@example.com>", "a", "b", "s", "body", 1)
+    scoped = GmailQueryMatcher._scoped_query(email, "from:trusted@example.com")
+    assert "rfc822msgid:abc@example.com" in scoped

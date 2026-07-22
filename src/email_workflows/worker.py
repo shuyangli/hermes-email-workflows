@@ -125,26 +125,46 @@ class WorkflowWorker:
             self.store.set_setting("worker_status", "error")
             pubsub_message.nack()
 
-    def _process_ids(self, account: str, message_ids: list[str]) -> None:
+    def _process_ids(self, account: str, message_ids: list[str], background: bool = False) -> None:
         rules = self.store.list_rules(account)
         for message_id in message_ids:
-            message = self.gmail.fetch_message(message_id)
-            event = (
-                self.store.get_event(account, message_id)
-                if hasattr(self.store, "get_event")
-                else None
-            )
-            resumable = event and (
-                event["status"] == "retryable"
-                or event["status"].startswith("notification_pending:")
-            )
-            if "UNREAD" in message.labels or resumable:
-                self.engine.process(message, rules)
+            try:
+                message = self.gmail.fetch_message(message_id)
+                event = (
+                    self.store.get_event(account, message_id)
+                    if hasattr(self.store, "get_event")
+                    else None
+                )
+                resumable = event and (
+                    event["status"] == "retryable"
+                    or event["status"].startswith("notification_pending:")
+                )
+                if "UNREAD" in message.labels or resumable:
+                    self.engine.process(message, rules, allow_rematch=background)
+            except Exception:
+                # Background sweeps must not let one bad message (e.g. deleted, or a task
+                # failure) abort the batch; the row keeps its state and is retried next
+                # sweep. The push path re-raises so the notification is nacked and redelivered.
+                if not background:
+                    raise
+                logger.exception("Failed to process message %s during background sync", message_id)
+
+    def _resumable_ids(self, account: str, unread_ids: list[str]) -> list[str]:
+        """Unread ids plus mid-flight (already-read) ids, de-duplicated in order."""
+        combined = list(unread_ids)
+        seen = set(combined)
+        if hasattr(self.store, "resumable_message_ids"):
+            for message_id in self.store.resumable_message_ids(account):
+                if message_id not in seen:
+                    seen.add(message_id)
+                    combined.append(message_id)
+        return combined
 
     def _recover_stale_history(self, account: str) -> None:
         topic = self.store.get_setting("topic_path", "") or ""
         watch = self.gmail.start_watch(topic)
-        self._process_ids(account, self.gmail.unread_inbox_message_ids())
+        ids = self._resumable_ids(account, self.gmail.unread_inbox_message_ids())
+        self._process_ids(account, ids, background=True)
         self.store.set_setting("history_id", str(watch["historyId"]))
         self.store.set_setting("watch_expiration", str(watch["expiration"]))
         self.store.set_setting("last_history_recovery_at", str(int(time.time())))
@@ -154,7 +174,11 @@ class WorkflowWorker:
             try:
                 account = self.store.get_setting("account_email", "") or ""
                 with self._sync_lock:
-                    self._process_ids(account, self.gmail.unread_inbox_message_ids())
+                    self._process_ids(
+                        account,
+                        self._resumable_ids(account, self.gmail.unread_inbox_message_ids()),
+                        background=True,
+                    )
                     self.store.set_setting("last_safety_sync_at", str(int(time.time())))
                     self.store.set_setting("worker_status", "running")
             except Exception:

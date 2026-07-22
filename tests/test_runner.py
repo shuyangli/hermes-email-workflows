@@ -1,7 +1,27 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import time
+
+import pytest
+
 from email_workflows.models import EmailMessage, Rule
-from email_workflows.runner import HermesRunner
+from email_workflows.runner import HermesRunner, _execute
+
+
+def test_execute_kills_a_timed_out_process_group():
+    # Real subprocess path: a child that outlives its timeout must be terminated (not left
+    # to hang the caller) and the timeout surfaced.
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _execute([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+    assert time.monotonic() - start < 15
+
+
+def test_execute_reports_missing_binary_as_oserror():
+    with pytest.raises(OSError):
+        _execute(["definitely-not-a-real-binary-xyz"], timeout=5)
 
 
 def test_prompt_template_renders_email_fields_and_wraps_untrusted_content():
