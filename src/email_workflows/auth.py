@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import google.auth
 from google.auth.transport.requests import Request
@@ -14,20 +17,57 @@ from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 PUBSUB_SCOPES = ["https://www.googleapis.com/auth/pubsub"]
+_OAUTHLIB_ENV_LOCK = threading.RLock()
+
+
+def _validate_oauth_client_endpoints(client_secret_path: str | Path) -> None:
+    data = json.loads(Path(client_secret_path).expanduser().read_text(encoding="utf-8"))
+    client = data.get("installed") or data.get("web") or {}
+    for field in ("auth_uri", "token_uri"):
+        uri = client.get(field, "")
+        parsed = urlsplit(uri) if isinstance(uri, str) else None
+        if parsed is None or parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError(f"OAuth client {field} must use HTTPS")
+
+
+@contextmanager
+def _loopback_http_oauth(redirect_uri: str):
+    """Temporarily allow OAuthlib's HTTP redirect for loopback hosts only."""
+    parsed = urlsplit(redirect_uri)
+    if parsed.scheme != "http":
+        if parsed.scheme != "https":
+            raise ValueError("OAuth redirect URI must use HTTPS or loopback HTTP")
+        yield
+        return
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("OAuth HTTP redirect must use a loopback host")
+
+    with _OAUTHLIB_ENV_LOCK:
+        previous = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
+        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+            else:
+                os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = previous
 
 
 def begin_oauth(client_secret_path: str, redirect_uri: str) -> tuple[str, str, str]:
+    _validate_oauth_client_endpoints(client_secret_path)
     flow = Flow.from_client_secrets_file(
         str(Path(client_secret_path).expanduser()),
         scopes=SCOPES,
         redirect_uri=redirect_uri,
         autogenerate_code_verifier=True,
     )
-    url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent select_account",
-    )
+    with _loopback_http_oauth(redirect_uri):
+        url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent select_account",
+        )
     return url, state, flow.code_verifier or ""
 
 
@@ -39,6 +79,7 @@ def finish_oauth(
     authorization_response: str,
     token_path: str | Path,
 ) -> Credentials:
+    _validate_oauth_client_endpoints(client_secret_path)
     flow = Flow.from_client_secrets_file(
         str(Path(client_secret_path).expanduser()),
         scopes=SCOPES,
@@ -46,7 +87,8 @@ def finish_oauth(
         redirect_uri=redirect_uri,
         code_verifier=code_verifier,
     )
-    flow.fetch_token(authorization_response=authorization_response)
+    with _loopback_http_oauth(redirect_uri):
+        flow.fetch_token(authorization_response=authorization_response)
     save_credentials(flow.credentials, token_path)
     return flow.credentials
 

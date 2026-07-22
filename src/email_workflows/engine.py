@@ -64,7 +64,23 @@ class WorkflowEngine:
             # User-selected semantic: once any rule matches, mark read before task execution.
             self.gmail.mark_read(message.gmail_id)
             results = [self.runner.run(rule, message) for rule in matched]
-            notification = self._format_notification(message, results)
+            visible_results = [
+                result
+                for result in results
+                if not (result.success and result.output.strip() == "NO_NOTIFICATION")
+            ]
+            if not visible_results:
+                status = "completed_silent"
+                self.store.finish_message(
+                    self.account_email,
+                    message.gmail_id,
+                    status,
+                    rule_ids,
+                    "",
+                )
+                return ProcessResult(status, message.gmail_id, rule_ids, "")
+
+            notification = self._format_notification(message, visible_results)
             status = (
                 "completed"
                 if all(result.success for result in results)

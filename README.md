@@ -17,6 +17,8 @@ The service never replies by email. It runs on `127.0.0.1`, keeps credentials an
 - Evaluates every enabled rule using Gmail's own search language. One email may match multiple rules.
 - Runs each matching rule as a separate, fresh `hermes chat` session.
 - Combines the rule outputs into one Telegram message through `hermes send --to telegram`.
+- Suppresses a successful rule's Telegram section when its exact output is `NO_NOTIFICATION`; if
+  every matched rule returns that sentinel, the email completes without any Telegram message.
 - Marks the email read as soon as at least one rule matches.
 - Leaves unmatched emails unread.
 - Deduplicates Gmail message IDs in SQLite. If Telegram delivery fails, it retries the saved notification without rerunning Hermes tasks.
@@ -28,7 +30,8 @@ The service never replies by email. It runs on `127.0.0.1`, keeps credentials an
 - Hermes Agent configured with a Telegram home channel
 - A Google Cloud project where you can manage Pub/Sub resources
 - An OAuth Desktop client JSON from that same project
-- Google Cloud Application Default Credentials (ADC) for Pub/Sub administration/subscription
+- Google Cloud Application Default Credentials (ADC): either provisioning authority, or
+  subscription-scoped consume authority when resources are pre-provisioned
 
 Gmail requires the Pub/Sub topic to live in the same Google Cloud project as the OAuth client used for the Gmail API call.
 
@@ -42,7 +45,9 @@ For the OAuth client's project:
 2. Configure the OAuth consent screen.
 3. If the app is in Testing, add every Gmail account you may connect as a test user.
 4. Create an OAuth client with application type **Desktop app** and download its JSON file.
-5. Configure separate Cloud credentials and ensure that principal can create Pub/Sub topics/subscriptions and edit topic IAM policy. Project Owner or Pub/Sub Admin plus permission to set IAM policy is sufficient.
+5. Choose one Pub/Sub mode:
+   - **Provision locally:** configure separate Cloud credentials that can create Pub/Sub topics/subscriptions and edit topic IAM policy. Project Owner or Pub/Sub Admin plus permission to set IAM policy is sufficient.
+   - **Pre-provisioned:** create and validate the topic, Gmail publisher IAM grant, and pull subscription elsewhere, then give the runtime identity only `pubsub.subscriptions.consume` on that subscription. Enable **Resources are pre-provisioned** in Setup; this mode performs no Pub/Sub metadata or IAM calls.
 
 For local user credentials:
 
@@ -135,6 +140,9 @@ ${body}
 ${gmail_id}
 ${thread_id}
 ```
+
+For conditional alerts, instruct the workflow to return exactly `NO_NOTIFICATION` (with no other
+text) when the notification condition is not met. Failed tasks are never suppressed.
 
 Example:
 

@@ -31,7 +31,7 @@ payload = {
     "StandardErrorPath": str(Path(os.environ["LOG_DIR"]) / "stderr.log"),
     "EnvironmentVariables": {
         "HOME": os.environ["HOME"],
-        "PATH": os.environ["HOME"] + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        "PATH": os.environ["HOME"] + "/.hermes/hermes-agent/venv/bin:" + os.environ["HOME"] + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         "PYTHONUNBUFFERED": "1",
     },
 }

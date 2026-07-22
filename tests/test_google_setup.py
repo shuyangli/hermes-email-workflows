@@ -124,62 +124,23 @@ def _preprovisioned_pubsub(subscriptions_cls):
     return pubsub
 
 
-def test_preprovisioned_mode_validates_without_touching_topic_or_iam():
-    class ExistingSubscriptions(Subscriptions):
-        def get(self, **kwargs):
-            return Request({"topic": "projects/my-project/topics/gmail-events"})
+def test_preprovisioned_mode_uses_paths_without_cloud_metadata_calls():
+    class ConsumeOnlySubscriptions(Subscriptions):
+        """A consume-only identity cannot call subscription metadata APIs."""
 
-    pubsub = _preprovisioned_pubsub(ExistingSubscriptions)
+        def get(self, **kwargs):
+            raise AssertionError("preprovisioned mode must not call subscriptions.get")
+
+        def create(self, **kwargs):
+            raise AssertionError("preprovisioned mode must not create subscriptions")
+
+    pubsub = _preprovisioned_pubsub(ConsumeOnlySubscriptions)
     result = GoogleSetup(pubsub).ensure_pubsub(
         "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
     )
+
     assert result.topic == "projects/my-project/topics/gmail-events"
     assert result.subscription == "projects/my-project/subscriptions/gmail-events-local"
-    assert pubsub.sub_api.created == []
-
-
-def test_preprovisioned_mode_rejects_subscription_on_wrong_topic():
-    class WrongTopicSubscriptions(Subscriptions):
-        def get(self, **kwargs):
-            return Request({"topic": "projects/my-project/topics/other"})
-
-    pubsub = _preprovisioned_pubsub(WrongTopicSubscriptions)
-    try:
-        GoogleSetup(pubsub).ensure_pubsub(
-            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
-        )
-    except RuntimeError as exc:
-        assert "topics/other" in str(exc)
-    else:
-        raise AssertionError("expected topic mismatch")
-
-
-def test_preprovisioned_mode_explains_missing_subscription():
-    pubsub = _preprovisioned_pubsub(Subscriptions)  # get() raises 404
-    try:
-        GoogleSetup(pubsub).ensure_pubsub(
-            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
-        )
-    except RuntimeError as exc:
-        assert "does not exist" in str(exc)
-    else:
-        raise AssertionError("expected missing-subscription error")
-
-
-def test_preprovisioned_mode_explains_permission_denial():
-    class DeniedSubscriptions(Subscriptions):
-        def get(self, **kwargs):
-            raise ApiError(403)
-
-    pubsub = _preprovisioned_pubsub(DeniedSubscriptions)
-    try:
-        GoogleSetup(pubsub).ensure_pubsub(
-            "my-project", "gmail-events", "gmail-events-local", preprovisioned=True
-        )
-    except RuntimeError as exc:
-        assert "roles/pubsub.subscriber" in str(exc)
-    else:
-        raise AssertionError("expected permission error")
 
 
 def test_existing_subscription_must_target_requested_topic():
