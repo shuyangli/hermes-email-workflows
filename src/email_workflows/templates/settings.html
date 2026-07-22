@@ -7,6 +7,7 @@
 <label>Google Cloud project ID<input required name="project_id" value="{{ settings.get('project_id', 'shuyangli-claw') }}"></label>
 <label>OAuth client JSON path<input required name="client_secret_path" value="{{ settings.get('client_secret_path', '~/.hermes/google_client_secret.json') }}"></label>
 <div class="row"><label>Pub/Sub topic<input name="topic_id" value="{{ settings.get('topic_id', 'hermes-email-events') }}"></label><label>Pull subscription<input name="subscription_id" value="{{ settings.get('subscription_id', 'hermes-email-workflows-local') }}"></label></div>
+<label><input type="checkbox" name="preprovisioned"{% if settings.get('pubsub_mode', '') == 'preprovisioned' %} checked{% endif %}> Resources are pre-provisioned (skip creation and IAM changes; works with a subscriber-only credential)</label>
 <button class="button" type="submit">Save and connect Google</button>
 </form>
 <div class="callout"><strong>Current account</strong><span>{{ settings.get('account_email', 'Not connected') }}</span></div>

@@ -136,14 +136,12 @@ The provisioning agent should return:
 - OAuth consent/client readiness;
 - any organization-policy or permission blockers.
 
-## Current application caveat
+## Pre-provisioned resources mode
 
-The current OAuth callback calls `GoogleSetup.ensure_pubsub()`. Even when the topic and subscription already exist, that method reads and writes the topic IAM policy. Therefore a subscription-only runtime credential is not sufficient for first-time OAuth setup in the current implementation.
-
-Before using the least-privilege runtime identity for live setup, add a **pre-provisioned resources mode** that:
+The setup form has a "Resources are pre-provisioned" checkbox. When checked, the OAuth callback:
 
 - uses the configured topic and subscription without creating them;
-- does not mutate IAM;
-- optionally validates resource names without requiring administrator credentials.
+- performs no IAM reads or writes;
+- validates only that the subscription exists and is attached to the configured topic (a subscriber-only credential cannot read the topic itself).
 
-Until that change exists, completing the OAuth callback requires broader Pub/Sub setup permissions on the local machine, which defeats the intended credential separation.
+With the checkbox enabled, the least-privilege runtime identity (`roles/pubsub.subscriber` on the subscription only) is sufficient to complete OAuth setup. Leave it unchecked only when the local Application Default Credentials are intentionally privileged enough to create resources and administer topic IAM — the historical behavior, which re-writes topic IAM on every reconnect.
