@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from email_workflows.engine import WorkflowEngine
+from email_workflows.models import EmailMessage, Rule, TaskResult
+
+
+def test_multiple_matching_rules_run_separately_but_send_one_combined_notification():
+    events: list[str] = []
+    email = EmailMessage("m1", "t1", "<a@b>", "a@example.com", "me@example.com", "Hi", "Body", 1)
+    rules = [
+        Rule(id=1, name="summarize", gmail_query="from:a", prompt_template="Summarize ${subject}"),
+        Rule(id=2, name="extract", gmail_query="subject:Hi", prompt_template="Extract ${body}"),
+    ]
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            events.append("matched")
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            events.append(f"read:{message_id}")
+
+    class Runner:
+        def run(self, rule, message):
+            events.append(f"run:{rule.name}")
+            return TaskResult(rule.id, rule.name, True, f"result-{rule.name}")
+
+    class Notifier:
+        def send(self, text):
+            events.append("sent")
+            self.text = text
+
+    class Store:
+        def claim_message(self, account, message_id):
+            events.append("claimed")
+            return True
+
+        def finish_message(self, account, message_id, status, matched_rule_ids, notification):
+            events.append(f"finished:{status}")
+
+    notifier = Notifier()
+    engine = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), notifier, "me@example.com")
+
+    result = engine.process(email, rules)
+
+    assert result.status == "completed"
+    assert events.index("read:m1") < events.index("run:summarize")
+    assert events.count("sent") == 1
+    assert "summarize" in notifier.text and "extract" in notifier.text
+    assert "result-summarize" in notifier.text and "result-extract" in notifier.text
+
+
+def test_unmatched_email_is_not_marked_read_or_notified():
+    class Store:
+        def claim_message(self, account, message_id):
+            return True
+
+        def finish_message(self, *args, **kwargs):
+            self.status = args[2]
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return []
+
+    class Gmail:
+        def mark_read(self, message_id):
+            raise AssertionError("must not mark read")
+
+    class Runner:
+        def run(self, rule, message):
+            raise AssertionError("must not run")
+
+    class Notifier:
+        def send(self, text):
+            raise AssertionError("must not notify")
+
+    email = EmailMessage("m1", "t1", None, "a", "b", "s", "body", 1)
+    result = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), Notifier(), "me").process(
+        email, []
+    )
+    assert result.status == "unmatched"
+
+
+def test_duplicate_message_is_skipped():
+    class Store:
+        def claim_message(self, account, message_id):
+            return False
+
+    class Never:
+        def __getattr__(self, name):
+            raise AssertionError("duplicate must stop")
+
+    email = EmailMessage("m1", "t1", None, "a", "b", "s", "body", 1)
+    result = WorkflowEngine(Store(), Never(), Never(), Never(), Never(), "me").process(email, [])
+    assert result.status == "duplicate"
