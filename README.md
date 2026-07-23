@@ -5,7 +5,7 @@ A local Gmail automation dashboard for [Hermes Agent](https://github.com/NousRes
 ```text
 Gmail watch → Google Cloud Pub/Sub pull → Gmail-query rules
             → one fresh Hermes task per matched rule
-            → one combined Telegram notification per email
+            → notifications grouped by per-rule Telegram destination
 ```
 
 The service never replies by email. It runs on `127.0.0.1`, keeps credentials and state outside the repository, and uses OAuth rather than an IMAP password or Gmail App Password.
@@ -16,12 +16,14 @@ The service never replies by email. It runs on `127.0.0.1`, keeps credentials an
 - Receives near-real-time mailbox changes through Gmail API `watch` and a local Pub/Sub pull subscriber.
 - Evaluates every enabled rule using Gmail's own search language. One email may match multiple rules.
 - Runs each matching rule as a separate, fresh `hermes chat` session.
-- Combines the rule outputs into one Telegram message through `hermes send --to telegram`.
+- Groups rule outputs by their configured Telegram destination and sends one message to each
+  destination through `hermes send`.
 - Suppresses a successful rule's Telegram section when its exact output is `NO_NOTIFICATION`; if
   every matched rule returns that sentinel, the email completes without any Telegram message.
 - Marks the email read as soon as at least one rule matches.
 - Leaves unmatched emails unread.
-- Deduplicates Gmail message IDs in SQLite. If Telegram delivery fails, it retries the saved notification without rerunning Hermes tasks.
+- Deduplicates Gmail message IDs in SQLite. If delivery to one destination fails, it retries only
+  destinations that have not already succeeded, without rerunning Hermes tasks.
 - Renews the Gmail watch before its seven-day expiration.
 
 ## Requirements
@@ -129,6 +131,9 @@ Each rule has:
 - **Timeout** — maximum runtime for that Hermes task
 - **Toolsets** — toolsets default to `web` and are restricted to `web` or `vision`; terminal, filesystem, computer-control, skills, and other ambient or side-effecting capabilities are rejected.
 - **Account restriction** — optional; blank rules apply to whichever account is active
+- **Telegram destination** — `telegram` for the configured Home channel, or
+  `telegram:<chat_id>` / `telegram:<chat_id>:<thread_id>` for a specific chat or topic. Run
+  `hermes send --list telegram` to find available chat IDs.
 
 Available prompt variables:
 
@@ -186,8 +191,9 @@ curl http://127.0.0.1:8787/healthz
 
 - Pub/Sub notifications are acknowledged only after history processing succeeds.
 - Gmail message IDs are unique per connected account and form the deduplication key.
-- The combined Telegram notification is persisted before delivery. A delivery retry does not rerun completed Hermes tasks.
-- Task failures are included in the combined Telegram notification instead of preventing other matched rules from running.
+- Per-destination Telegram notifications and delivery progress are persisted before delivery. A
+  retry skips destinations already sent and does not rerun completed Hermes tasks.
+- Task failures are included in the relevant destination's notification instead of preventing other matched rules from running.
 - The Gmail history cursor advances only after all messages in the notification are handled.
 - A ten-minute safety scan recovers from dropped Pub/Sub notifications.
 - An expired Gmail history cursor creates a new watch boundary and reconciles currently unread inbox messages against the durable message-ID ledger.

@@ -51,6 +51,56 @@ def test_multiple_matching_rules_run_separately_but_send_one_combined_notificati
     assert "result-summarize" in notifier.text and "result-extract" in notifier.text
 
 
+def test_matching_rules_are_grouped_and_sent_to_their_destinations():
+    email = EmailMessage("m1", "t1", None, "a", "b", "subject", "body", 1)
+    rules = [
+        Rule(1, "home one", "x", "x"),
+        Rule(2, "group", "x", "x", destination="telegram:-1001234567890"),
+        Rule(3, "home two", "x", "x"),
+    ]
+
+    class Store:
+        def claim_message(self, account, message_id):
+            return True
+
+        def finish_message(self, *args):
+            pass
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            pass
+
+    class Runner:
+        def run(self, rule, message):
+            return TaskResult(rule.id, rule.name, True, f"result-{rule.name}")
+
+    class Notifier:
+        def __init__(self):
+            self.deliveries = []
+
+        def send(self, text, destination="telegram"):
+            self.deliveries.append((destination, text))
+
+    notifier = Notifier()
+    result = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), notifier, "me").process(
+        email, rules
+    )
+
+    assert result.status == "completed"
+    assert [destination for destination, _ in notifier.deliveries] == [
+        "telegram",
+        "telegram:-1001234567890",
+    ]
+    home = notifier.deliveries[0][1]
+    group = notifier.deliveries[1][1]
+    assert "home one" in home and "home two" in home and "group" not in home
+    assert "group" in group and "home one" not in group and "home two" not in group
+
+
 def test_unmatched_email_is_not_marked_read_or_notified():
     class Store:
         def claim_message(self, account, message_id):
@@ -211,6 +261,9 @@ def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
         "read",
         "finished:notification_pending:completed",
         "sent",
+        # Persist the successful destination before finalizing so a crash does not
+        # resend it while another destination is still pending.
+        "finished:notification_pending:completed",
         "finished:completed",
     ]
 

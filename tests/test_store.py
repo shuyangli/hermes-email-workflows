@@ -21,6 +21,52 @@ def test_rule_crud_and_order(tmp_path: Path):
     assert [rule.id for rule in store.list_rules()] == [first.id]
 
 
+def test_rule_destination_round_trips(tmp_path: Path):
+    store = Store(tmp_path / "app.db")
+    created = store.create_rule(
+        Rule(None, "group", "from:a", "A", destination="telegram:-1001234567890")
+    )
+
+    assert store.get_rule(created.id).destination == "telegram:-1001234567890"
+
+    created.destination = "telegram"
+    store.update_rule(created)
+    assert store.get_rule(created.id).destination == "telegram"
+
+
+def test_existing_database_adds_destination_column(tmp_path: Path):
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            gmail_query TEXT NOT NULL,
+            prompt_template TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 100,
+            account_email TEXT,
+            toolsets TEXT NOT NULL DEFAULT 'web',
+            skills TEXT NOT NULL DEFAULT '',
+            timeout_seconds INTEGER NOT NULL DEFAULT 300,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+            )"""
+        )
+        db.execute(
+            """INSERT INTO rules
+            (name,gmail_query,prompt_template,created_at,updated_at)
+            VALUES ('existing','from:a','A','now','now')"""
+        )
+
+    store = Store(path)
+    assert store.list_rules()[0].destination == "telegram"
+    created = store.create_rule(Rule(None, "legacy", "from:a", "A"))
+    assert store.get_rule(created.id).destination == "telegram"
+
+
 def test_database_is_private(tmp_path: Path):
     path = tmp_path / "app.db"
     Store(path)

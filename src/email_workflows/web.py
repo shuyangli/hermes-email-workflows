@@ -16,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import PlainTextResponse
 
 from .models import Rule
+from .notifier import TELEGRAM_DESTINATION
 from .store import Store
 
 PACKAGE_DIR = Path(__file__).parent
@@ -30,6 +31,16 @@ def _validate_rule(name: str, gmail_query: str, prompt_template: str, timeout: i
         raise HTTPException(400, "Name, Gmail query, and prompt are required")
     if not 1 <= timeout <= 1800:
         raise HTTPException(400, "Timeout must be between 1 and 1800 seconds")
+
+
+def _validate_destination(destination: str) -> str:
+    destination = destination.strip() or "telegram"
+    if not TELEGRAM_DESTINATION.fullmatch(destination):
+        raise HTTPException(
+            400,
+            "Destination must be telegram, telegram:<chat_id>, or telegram:<chat_id>:<thread_id>",
+        )
+    return destination
 
 
 def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI:
@@ -112,6 +123,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         toolsets: str = Form("web"),
         skills: str = Form(""),
         timeout_seconds: int = Form(300),
+        destination: str = Form("telegram"),
     ):
         _validate_rule(name, gmail_query, prompt_template, timeout_seconds)
         store.create_rule(
@@ -126,6 +138,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
                 toolsets=toolsets.strip() or "web",
                 skills=skills.strip(),
                 timeout_seconds=timeout_seconds,
+                destination=_validate_destination(destination),
             )
         )
         return RedirectResponse("/", status_code=303)
@@ -142,6 +155,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
         toolsets: str = Form("web"),
         skills: str = Form(""),
         timeout_seconds: int = Form(300),
+        destination: str = Form("telegram"),
     ):
         _validate_rule(name, gmail_query, prompt_template, timeout_seconds)
         try:
@@ -157,6 +171,7 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
                     toolsets=toolsets.strip() or "web",
                     skills=skills.strip(),
                     timeout_seconds=timeout_seconds,
+                    destination=_validate_destination(destination),
                 )
             )
         except KeyError as exc:
