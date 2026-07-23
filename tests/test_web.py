@@ -25,6 +25,7 @@ def test_dashboard_creates_and_lists_rule(tmp_path: Path):
             "toolsets": "",
             "skills": "",
             "account_email": "",
+            "destination": "telegram:-1001234567890",
         },
         follow_redirects=False,
     )
@@ -34,6 +35,10 @@ def test_dashboard_creates_and_lists_rule(tmp_path: Path):
     assert page.status_code == 200
     assert "Invoices" in page.text
     assert "from:billing@example.com is:unread" in page.text
+    rule = store.list_rules()[0]
+    assert rule.destination == "telegram:-1001234567890"
+    edit_page = client.get(f"/rules/{rule.id}/edit")
+    assert 'value="telegram:-1001234567890"' in edit_page.text
 
 
 def test_updating_a_missing_rule_returns_404(tmp_path: Path):
@@ -152,5 +157,19 @@ def test_rule_input_validation_rejects_blank_fields(tmp_path: Path):
     response = client.post(
         "/rules",
         data={"name": " ", "gmail_query": " ", "prompt_template": " ", "timeout_seconds": "0"},
+    )
+    assert response.status_code == 400
+
+
+def test_rule_input_validation_rejects_invalid_destination(tmp_path: Path):
+    client = TestClient(create_app(Store(tmp_path / "app.db"), start_worker=False))
+    response = client.post(
+        "/rules",
+        data={
+            "name": "bad target",
+            "gmail_query": "from:a",
+            "prompt_template": "x",
+            "destination": "--provider=attacker",
+        },
     )
     assert response.status_code == 400

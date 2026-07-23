@@ -12,6 +12,8 @@
 <label>Hermes toolset<input name="toolsets" value="{{ rule.toolsets if rule else 'web' }}" placeholder="web"></label>
 <p class="hint">Security boundary: only <code>web</code> and <code>vision</code> are accepted. Skills and local/side-effecting tools are disabled.</p>
 <label>Account restriction<input name="account_email" value="{{ rule.account_email if rule and rule.account_email else '' }}" placeholder="Blank = any connected account"></label>
+<label>Telegram destination<input name="destination" required value="{{ rule.destination if rule else 'telegram' }}" placeholder="telegram or telegram:-1001234567890"></label>
+<p class="hint"><code>telegram</code> sends to Home. Use <code>telegram:&lt;chat_id&gt;</code> for a group. Run <code>hermes send --list telegram</code> to find chat IDs.</p>
 <label class="check"><input type="checkbox" name="enabled" {% if not rule or rule.enabled %}checked{% endif %}> Enabled</label>
 <div class="actions"><button class="button" type="submit">Save rule</button><a href="/">Cancel</a></div>
 </form>

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero"><div><p class="eyebrow">Gmail → Hermes → Telegram</p><h1>Email automations without inbox replies.</h1><p>One active Gmail account. Every matching rule runs independently; results arrive as one Telegram message.</p></div><a class="button" href="/rules/new">New rule</a></section>
+<section class="hero"><div><p class="eyebrow">Gmail → Hermes → Telegram</p><h1>Email automations without inbox replies.</h1><p>One active Gmail account. Every matching rule runs independently; results are grouped by configured Telegram destination.</p></div><a class="button" href="/rules/new">New rule</a></section>
 <section class="status-grid">
   <article><span>Account</span><strong>{{ settings.get('account_email', 'Not connected') }}</strong></article>
   <article><span>OAuth</span><strong>{{ 'Connected' if oauth_configured else 'Setup required' }}</strong></article>
   <article><span>Watch</span><strong>{{ settings.get('watch_expiration', 'Inactive') }}</strong></article>
 </section>
 <section><div class="section-head"><h2>Rules</h2><span>{{ rules|length }} configured</span></div>
-{% if rules %}<div class="cards">{% for rule in rules %}<article class="rule-card"><div><span class="pill {{ 'on' if rule.enabled else 'off' }}">{{ 'Active' if rule.enabled else 'Paused' }}</span><h3>{{ rule.name }}</h3><code>{{ rule.gmail_query }}</code><p>{{ rule.prompt_template|truncate(150) }}</p></div><a href="/rules/{{ rule.id }}/edit">Edit</a></article>{% endfor %}</div>{% else %}<div class="empty">No rules yet. Add a Gmail query and a Hermes prompt.</div>{% endif %}</section>
+{% if rules %}<div class="cards">{% for rule in rules %}<article class="rule-card"><div><span class="pill {{ 'on' if rule.enabled else 'off' }}">{{ 'Active' if rule.enabled else 'Paused' }}</span><h3>{{ rule.name }}</h3><code>{{ rule.gmail_query }}</code><p>{{ rule.prompt_template|truncate(150) }}</p><p class="hint">Destination: <code>{{ rule.destination }}</code></p></div><a href="/rules/{{ rule.id }}/edit">Edit</a></article>{% endfor %}</div>{% else %}<div class="empty">No rules yet. Add a Gmail query and a Hermes prompt.</div>{% endif %}</section>
 <section><div class="section-head"><h2>Recent email runs</h2></div>
 {% if events %}<div class="table-wrap"><table><thead><tr><th>Message</th><th>Status</th><th>Updated</th></tr></thead><tbody>{% for event in events %}<tr><td><code>{{ event.message_id }}</code></td><td>{{ event.status }}</td><td>{{ event.updated_at }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">No email events processed yet.</div>{% endif %}</section>
 {% endblock %}

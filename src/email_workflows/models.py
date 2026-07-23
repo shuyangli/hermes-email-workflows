@@ -17,6 +17,7 @@ class Rule:
     toolsets: str = "web"
     skills: str = ""
     timeout_seconds: int = 300
+    destination: str = "telegram"
 
 
 @dataclass(slots=True)

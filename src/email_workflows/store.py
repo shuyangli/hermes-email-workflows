@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS rules (
     toolsets TEXT NOT NULL DEFAULT 'web',
     skills TEXT NOT NULL DEFAULT '',
     timeout_seconds INTEGER NOT NULL DEFAULT 300,
+    destination TEXT NOT NULL DEFAULT 'telegram',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -58,6 +59,11 @@ class Store:
         self._lock = threading.RLock()
         with self._connect() as db:
             db.executescript(_SCHEMA)
+            rule_columns = {row["name"] for row in db.execute("PRAGMA table_info(rules)")}
+            if "destination" not in rule_columns:
+                db.execute(
+                    "ALTER TABLE rules ADD COLUMN destination TEXT NOT NULL DEFAULT 'telegram'"
+                )
             db.execute("UPDATE message_events SET status='retryable' WHERE status='processing'")
         os.chmod(self.path, 0o600)
         self._repair_sidecar_permissions()
@@ -83,8 +89,8 @@ class Store:
             cur = db.execute(
                 """INSERT INTO rules
                 (name,gmail_query,prompt_template,enabled,priority,account_email,toolsets,skills,
-                 timeout_seconds,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                 timeout_seconds,destination,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     rule.name,
                     rule.gmail_query,
@@ -95,6 +101,7 @@ class Store:
                     rule.toolsets,
                     rule.skills,
                     rule.timeout_seconds,
+                    rule.destination,
                     now,
                     now,
                 ),
@@ -107,7 +114,8 @@ class Store:
         with self._lock, self._connect() as db:
             cur = db.execute(
                 """UPDATE rules SET name=?,gmail_query=?,prompt_template=?,enabled=?,priority=?,
-                account_email=?,toolsets=?,skills=?,timeout_seconds=?,updated_at=? WHERE id=?""",
+                account_email=?,toolsets=?,skills=?,timeout_seconds=?,destination=?,updated_at=?
+                WHERE id=?""",
                 (
                     rule.name,
                     rule.gmail_query,
@@ -118,6 +126,7 @@ class Store:
                     rule.toolsets,
                     rule.skills,
                     rule.timeout_seconds,
+                    rule.destination,
                     self._now(),
                     rule.id,
                 ),
@@ -158,6 +167,7 @@ class Store:
             toolsets=row["toolsets"] or "web",
             skills=row["skills"],
             timeout_seconds=row["timeout_seconds"],
+            destination=row["destination"] or "telegram",
         )
 
     def claim_message(self, account_email: str, message_id: str) -> bool:
