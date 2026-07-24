@@ -259,13 +259,16 @@ def create_app(store: Store | None = None, start_worker: bool = True) -> FastAPI
             preprovisioned=store.get_setting("pubsub_mode", "") == "preprovisioned",
         )
         gmail = GmailClient(gmail_service)
+        gmail.ensure_processed_label()
         profile = gmail.profile()
         account_email = profile["emailAddress"]
-        # Establish a baseline so reconnecting does not treat an existing unread backlog
-        # as newly delivered mail during a later stale-history reconciliation.
-        for message_id in gmail.unread_inbox_message_ids():
+        # Establish a baseline so reconnecting does not treat the existing backlog as
+        # newly delivered mail during a later stale-history reconciliation. Stamp the
+        # processed label too, so safety sweeps stop listing baseline messages.
+        for message_id in gmail.unprocessed_inbox_message_ids():
             if store.claim_message(account_email, message_id):
                 store.finish_message(account_email, message_id, "baseline_ignored", [], "")
+            gmail.add_processed_label(message_id)
         watch = gmail.start_watch(resources.topic)
         for key, value in {
             "token_path": str(token_path),

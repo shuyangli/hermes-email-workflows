@@ -192,14 +192,15 @@ class Store:
 
         Gmail's search index (used by the rule matcher) is eventually consistent and can
         lag behind push delivery, so a freshly arrived message may be recorded as
-        ``unmatched`` before the index catches up. Bounding by ``within_seconds`` lets the
-        safety sweep re-evaluate such messages without re-scanning the entire unread backlog.
+        ``unmatched`` before the index catches up. Bounding by ``within_seconds`` since the
+        message was first seen (``created_at``) keeps the window fixed: re-evaluation must
+        not itself extend eligibility, or unmatched messages would be re-matched forever.
         """
         cutoff = (datetime.now(UTC) - timedelta(seconds=within_seconds)).isoformat()
         with self._lock, self._connect() as db:
             cur = db.execute(
                 """UPDATE message_events SET status='processing',updated_at=?
-                WHERE account_email=? AND message_id=? AND status='unmatched' AND updated_at>=?""",
+                WHERE account_email=? AND message_id=? AND status='unmatched' AND created_at>=?""",
                 (self._now(), account_email, message_id, cutoff),
             )
             return cur.rowcount == 1
@@ -207,8 +208,9 @@ class Store:
     def resumable_message_ids(self, account_email: str) -> list[str]:
         """Message ids left mid-flight (``retryable`` or notification pending).
 
-        These have already been marked read, so they never reappear in the unread-inbox
-        sweep and must be re-driven explicitly during recovery and safety synchronization.
+        These were already stamped with the processed label, so they never reappear in
+        the unprocessed-inbox sweep and must be re-driven explicitly during recovery and
+        safety synchronization.
         """
         with self._connect() as db:
             rows = db.execute(

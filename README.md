@@ -20,8 +20,12 @@ The service never replies by email. It runs on `127.0.0.1`, keeps credentials an
   destination through `hermes send`.
 - Suppresses a successful rule's Telegram section when its exact output is `NO_NOTIFICATION`; if
   every matched rule returns that sentinel, the email completes without any Telegram message.
-- Marks the email read as soon as at least one rule matches.
-- Leaves unmatched emails unread.
+- Stamps every handled email with the `hew-processed` Gmail label and marks matched
+  emails read. Processing state is tracked by the label and the SQLite ledger — never by
+  read status — so other consumers of the same mailbox (IMAP clients, the Hermes email
+  gateway) can freely change read state without starving or double-triggering workflows.
+- Leaves unmatched emails unstamped for one hour so they can be re-evaluated (Gmail's
+  search index can lag behind push delivery), then stamps them processed.
 - Deduplicates Gmail message IDs in SQLite. If delivery to one destination fails, it retries only
   destinations that have not already succeeded, without rerunning Hermes tasks.
 - Renews the Gmail watch before its seven-day expiration.
@@ -196,4 +200,4 @@ curl http://127.0.0.1:8787/healthz
 - Task failures are included in the relevant destination's notification instead of preventing other matched rules from running.
 - The Gmail history cursor advances only after all messages in the notification are handled.
 - A ten-minute safety scan recovers from dropped Pub/Sub notifications.
-- An expired Gmail history cursor creates a new watch boundary and reconciles currently unread inbox messages against the durable message-ID ledger.
+- An expired Gmail history cursor creates a new watch boundary and reconciles currently unstamped inbox messages against the durable message-ID ledger.

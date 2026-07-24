@@ -42,6 +42,7 @@ class WorkflowWorker:
         credentials = load_credentials(token_path)
         gmail_service, _ = build_services(credentials)
         gmail = GmailClient(gmail_service)
+        gmail.ensure_processed_label()
         account = store.get_setting("account_email", "") or gmail.profile()["emailAddress"]
         engine = WorkflowEngine(
             store,
@@ -127,6 +128,7 @@ class WorkflowWorker:
 
     def _process_ids(self, account: str, message_ids: list[str], background: bool = False) -> None:
         rules = self.store.list_rules(account)
+        processed_marker = getattr(self.gmail, "processed_label_id", "") or ""
         for message_id in message_ids:
             try:
                 message = self.gmail.fetch_message(message_id)
@@ -139,8 +141,19 @@ class WorkflowWorker:
                     event["status"] == "retryable"
                     or event["status"].startswith("notification_pending:")
                 )
-                if "UNREAD" in message.labels or resumable:
-                    self.engine.process(message, rules, allow_rematch=background)
+                unstamped = processed_marker not in message.labels
+                if unstamped or resumable:
+                    result = self.engine.process(message, rules, allow_rematch=background)
+                    if (
+                        background
+                        and unstamped
+                        and processed_marker
+                        and getattr(result, "status", "") == "duplicate"
+                    ):
+                        # Terminal ledger row (e.g. unmatched past its rematch window,
+                        # or one predating the label) whose message never got the
+                        # marker: stamp it so safety sweeps stop listing the message.
+                        self.gmail.add_processed_label(message_id)
             except Exception:
                 # Background sweeps must not let one bad message (e.g. deleted, or a task
                 # failure) abort the batch; the row keeps its state and is retried next
@@ -149,9 +162,9 @@ class WorkflowWorker:
                     raise
                 logger.exception("Failed to process message %s during background sync", message_id)
 
-    def _resumable_ids(self, account: str, unread_ids: list[str]) -> list[str]:
-        """Unread ids plus mid-flight (already-read) ids, de-duplicated in order."""
-        combined = list(unread_ids)
+    def _resumable_ids(self, account: str, unprocessed_ids: list[str]) -> list[str]:
+        """Unprocessed ids plus mid-flight (already-stamped) ids, de-duplicated in order."""
+        combined = list(unprocessed_ids)
         seen = set(combined)
         if hasattr(self.store, "resumable_message_ids"):
             for message_id in self.store.resumable_message_ids(account):
@@ -163,7 +176,7 @@ class WorkflowWorker:
     def _recover_stale_history(self, account: str) -> None:
         topic = self.store.get_setting("topic_path", "") or ""
         watch = self.gmail.start_watch(topic)
-        ids = self._resumable_ids(account, self.gmail.unread_inbox_message_ids())
+        ids = self._resumable_ids(account, self.gmail.unprocessed_inbox_message_ids())
         self._process_ids(account, ids, background=True)
         self.store.set_setting("history_id", str(watch["historyId"]))
         self.store.set_setting("watch_expiration", str(watch["expiration"]))
@@ -176,7 +189,7 @@ class WorkflowWorker:
                 with self._sync_lock:
                     self._process_ids(
                         account,
-                        self._resumable_ids(account, self.gmail.unread_inbox_message_ids()),
+                        self._resumable_ids(account, self.gmail.unprocessed_inbox_message_ids()),
                         background=True,
                     )
                     self.store.set_setting("last_safety_sync_at", str(int(time.time())))

@@ -58,7 +58,9 @@ class WorkflowEngine:
                 self.store.finish_message(self.account_email, message.gmail_id, "unmatched", [], "")
                 return ProcessResult("unmatched", message.gmail_id)
 
-            # User-selected semantic: once any rule matches, mark read before task execution.
+            # Once any rule matches, stamp the processed label (authoritative "handled"
+            # marker) and mark read (user-selected inbox semantic) before task execution.
+            self.gmail.add_processed_label(message.gmail_id)
             self.gmail.mark_read(message.gmail_id)
             rule_results = [(rule, self.runner.run(rule, message)) for rule in matched]
             visible_rule_results = [

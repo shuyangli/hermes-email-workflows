@@ -21,6 +21,9 @@ def test_multiple_matching_rules_run_separately_but_send_one_combined_notificati
         def mark_read(self, message_id):
             events.append(f"read:{message_id}")
 
+        def add_processed_label(self, message_id):
+            events.append(f"label:{message_id}")
+
     class Runner:
         def run(self, rule, message):
             events.append(f"run:{rule.name}")
@@ -74,6 +77,9 @@ def test_matching_rules_are_grouped_and_sent_to_their_destinations():
         def mark_read(self, message_id):
             pass
 
+        def add_processed_label(self, message_id):
+            pass
+
     class Runner:
         def run(self, rule, message):
             return TaskResult(rule.id, rule.name, True, f"result-{rule.name}")
@@ -117,6 +123,9 @@ def test_unmatched_email_is_not_marked_read_or_notified():
         def mark_read(self, message_id):
             raise AssertionError("must not mark read")
 
+        def add_processed_label(self, message_id):
+            raise AssertionError("must not stamp processed label")
+
     class Runner:
         def run(self, rule, message):
             raise AssertionError("must not run")
@@ -150,6 +159,9 @@ def test_exact_no_notification_result_completes_silently():
         def mark_read(self, message_id):
             events.append("read")
 
+        def add_processed_label(self, message_id):
+            events.append("label")
+
     class Runner:
         def run(self, rule, message):
             return TaskResult(rule.id, rule.name, True, "NO_NOTIFICATION")
@@ -168,7 +180,7 @@ def test_exact_no_notification_result_completes_silently():
     assert result.status == "completed_silent"
     assert result.matched_rule_ids == [1]
     assert result.notification == ""
-    assert events == ["read", "finished:completed_silent:"]
+    assert events == ["label", "read", "finished:completed_silent:"]
 
 
 def test_silent_result_is_omitted_when_another_rule_has_output():
@@ -185,6 +197,9 @@ def test_silent_result_is_omitted_when_another_rule_has_output():
 
     class Gmail:
         def mark_read(self, message_id):
+            pass
+
+        def add_processed_label(self, message_id):
             pass
 
     class Runner:
@@ -241,6 +256,9 @@ def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
         def mark_read(self, message_id):
             events.append("read")
 
+        def add_processed_label(self, message_id):
+            events.append("label")
+
     class Runner:
         def run(self, rule, message):
             return TaskResult(rule.id, rule.name, True, "ok")
@@ -258,6 +276,7 @@ def test_recently_unmatched_message_is_re_evaluated_when_rematch_allowed():
     assert result.status == "completed"
     assert events == [
         "reclaimed",
+        "label",
         "read",
         "finished:notification_pending:completed",
         "sent",

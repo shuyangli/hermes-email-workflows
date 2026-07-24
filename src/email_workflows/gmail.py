@@ -8,10 +8,47 @@ import re
 
 from .models import EmailMessage
 
+# Label stamped on every message this service has finished handling. Processing state
+# is tracked with this label instead of the UNREAD flag so that other mailbox
+# consumers (IMAP clients, the Hermes email gateway) can freely mark messages read
+# without starving the workflows, and vice versa.
+PROCESSED_LABEL_NAME = "hew-processed"
+
 
 class GmailClient:
-    def __init__(self, service):
+    def __init__(self, service, processed_label_id: str = ""):
         self.service = service
+        self.processed_label_id = processed_label_id
+
+    def ensure_processed_label(self) -> str:
+        """Find or create the processed-marker label and cache its id."""
+        if self.processed_label_id:
+            return self.processed_label_id
+        response = self.service.users().labels().list(userId="me").execute()
+        for label in response.get("labels", []):
+            if label.get("name", "").lower() == PROCESSED_LABEL_NAME:
+                self.processed_label_id = label["id"]
+                return self.processed_label_id
+        created = (
+            self.service.users()
+            .labels()
+            .create(
+                userId="me",
+                body={
+                    "name": PROCESSED_LABEL_NAME,
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                },
+            )
+            .execute()
+        )
+        self.processed_label_id = created["id"]
+        return self.processed_label_id
+
+    def add_processed_label(self, message_id: str) -> None:
+        self.service.users().messages().modify(
+            userId="me", id=message_id, body={"addLabelIds": [self.processed_label_id]}
+        ).execute()
 
     def profile(self) -> dict:
         return self.service.users().getProfile(userId="me").execute()
@@ -42,12 +79,9 @@ class GmailClient:
             userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
         ).execute()
 
-    def unread_inbox_message_ids(self) -> list[str]:
-        request = (
-            self.service.users()
-            .messages()
-            .list(userId="me", q="in:inbox is:unread", maxResults=500)
-        )
+    def unprocessed_inbox_message_ids(self) -> list[str]:
+        query = f"in:inbox -label:{PROCESSED_LABEL_NAME}"
+        request = self.service.users().messages().list(userId="me", q=query, maxResults=500)
         ids: list[str] = []
         while request is not None:
             response = request.execute()
@@ -58,7 +92,7 @@ class GmailClient:
             request = (
                 self.service.users()
                 .messages()
-                .list(userId="me", q="in:inbox is:unread", maxResults=500, pageToken=token)
+                .list(userId="me", q=query, maxResults=500, pageToken=token)
             )
         return ids
 

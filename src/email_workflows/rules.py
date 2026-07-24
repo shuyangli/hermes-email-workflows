@@ -54,8 +54,15 @@ class GmailQueryMatcher:
 
     @staticmethod
     def _scoped_query(message: EmailMessage, gmail_query: str) -> str:
+        # The scope deliberately carries no mailbox-state constraint (is:unread,
+        # -label:...). Matching answers only "does this message satisfy the rule
+        # query"; whether it should be processed is decided by the message-events
+        # ledger and the processed label. State constraints here would break
+        # re-matching after a crash, because the message is marked read and
+        # labeled before its tasks execute — and other mailbox consumers (e.g.
+        # an IMAP agent) may flip the read state at any time.
         message_id = (message.rfc822_message_id or "").strip().strip("<>")
         if message_id and _SAFE_RFC822_MSGID.fullmatch(message_id):
-            return f"({gmail_query}) rfc822msgid:{message_id} is:unread"
+            return f"({gmail_query}) rfc822msgid:{message_id}"
         seconds = max(message.internal_date_ms // 1000, 1)
-        return f"({gmail_query}) after:{seconds - 86400} before:{seconds + 86400} is:unread"
+        return f"({gmail_query}) after:{seconds - 86400} before:{seconds + 86400}"

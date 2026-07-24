@@ -25,6 +25,10 @@ def test_redelivery_after_telegram_failure_retries_notification_without_rerunnin
         def mark_read(self, message_id):
             calls["read"] += 1
 
+        def add_processed_label(self, message_id):
+            calls.setdefault("label", 0)
+            calls["label"] += 1
+
     class Runner:
         def run(self, rule, message):
             calls["run"] += 1
@@ -43,7 +47,7 @@ def test_redelivery_after_telegram_failure_retries_notification_without_rerunnin
     assert store.get_event("me", "m1")["status"] == "notification_pending:completed_with_errors"
     result = engine.process(email, [rule])
     assert result.status == "completed_with_errors"
-    assert calls == {"run": 1, "read": 1, "send": 2}
+    assert calls == {"run": 1, "read": 1, "send": 2, "label": 1}
 
 
 def test_processing_failure_is_retryable(tmp_path: Path):
@@ -85,6 +89,9 @@ def test_redelivery_retries_only_destinations_not_already_sent(tmp_path: Path):
 
     class Gmail:
         def mark_read(self, message_id):
+            pass
+
+        def add_processed_label(self, message_id):
             pass
 
     class Runner:

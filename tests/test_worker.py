@@ -21,9 +21,10 @@ class PubSubMessage:
         self.nacked = True
 
 
-def test_recovery_redrives_read_but_incomplete_messages(tmp_path):
-    # A message left `retryable` was already marked read, so it never appears in the unread
-    # inbox. Stale-history recovery must still re-drive it (regression: previously abandoned).
+def test_recovery_redrives_stamped_but_incomplete_messages(tmp_path):
+    # A message left `retryable` was already stamped processed, so it never appears in the
+    # unprocessed inbox. Stale-history recovery must still re-drive it (regression:
+    # previously abandoned).
     store = Store(tmp_path / "app.db")
     account = "me@example.com"
     store.set_setting("account_email", account)
@@ -34,14 +35,16 @@ def test_recovery_redrives_read_but_incomplete_messages(tmp_path):
     processed: list[str] = []
 
     class Gmail:
+        processed_label_id = "HEWPROC"
+
         def start_watch(self, topic):
             return {"historyId": "99", "expiration": "1"}
 
-        def unread_inbox_message_ids(self):
-            return ["fresh"]  # note: "stuck" is read, absent here
+        def unprocessed_inbox_message_ids(self):
+            return ["fresh"]  # note: "stuck" is stamped, absent here
 
         def fetch_message(self, message_id):
-            labels = ["UNREAD"] if message_id == "fresh" else []
+            labels = ["HEWPROC"] if message_id == "stuck" else []
             return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, labels)
 
     class Engine:
@@ -54,7 +57,7 @@ def test_recovery_redrives_read_but_incomplete_messages(tmp_path):
     assert "stuck" in processed and "fresh" in processed
 
 
-def test_pubsub_notification_processes_each_new_unread_message_and_advances_cursor():
+def test_pubsub_notification_processes_each_unstamped_message_and_advances_cursor():
     class Store:
         values = {"account_email": "me@example.com", "history_id": "10"}
 
@@ -68,11 +71,13 @@ def test_pubsub_notification_processes_each_new_unread_message_and_advances_curs
             return ["rule"]
 
     class Gmail:
+        processed_label_id = "HEWPROC"
+
         def history_message_ids(self, cursor):
             return ["m1", "m2"], "12"
 
         def fetch_message(self, message_id):
-            labels = ["UNREAD"] if message_id == "m1" else []
+            labels = [] if message_id == "m1" else ["HEWPROC"]
             return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, labels)
 
     class Engine:
@@ -125,7 +130,7 @@ def test_malformed_notification_is_acked_as_poison_message():
     assert store.values["last_worker_error"] == "Malformed Pub/Sub notification"
 
 
-def test_stale_history_recovers_from_current_unread_mail():
+def test_stale_history_recovers_from_current_unprocessed_mail():
     class Response:
         status = 404
 
@@ -149,17 +154,19 @@ def test_stale_history_recovers_from_current_unread_mail():
             return ["rule"]
 
     class Gmail:
+        processed_label_id = "HEWPROC"
+
         def history_message_ids(self, cursor):
             raise StaleHistory()
 
         def start_watch(self, topic):
             return {"historyId": "fresh", "expiration": "999"}
 
-        def unread_inbox_message_ids(self):
+        def unprocessed_inbox_message_ids(self):
             return ["m1"]
 
         def fetch_message(self, message_id):
-            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, ["UNREAD"])
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, [])
 
     class Engine:
         processed = []
@@ -175,7 +182,7 @@ def test_stale_history_recovers_from_current_unread_mail():
     assert store.values["history_id"] == "fresh"
 
 
-def test_worker_redelivery_retries_saved_notification_after_message_is_read(tmp_path):
+def test_worker_redelivery_retries_saved_notification_after_message_is_stamped(tmp_path):
     store = Store(tmp_path / "app.db")
     store.set_setting("account_email", "me@example.com")
     store.set_setting("history_id", "10")
@@ -183,17 +190,20 @@ def test_worker_redelivery_retries_saved_notification_after_message_is_read(tmp_
     calls = {"run": 0, "send": 0}
 
     class Gmail:
-        unread = True
+        processed_label_id = "HEWPROC"
+        labels: list[str] = []
 
         def history_message_ids(self, cursor):
             return ["m1"], "12"
 
         def fetch_message(self, message_id):
-            labels = ["UNREAD"] if self.unread else []
-            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, labels)
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, list(self.labels))
 
         def mark_read(self, message_id):
-            self.unread = False
+            pass
+
+        def add_processed_label(self, message_id):
+            self.labels = ["HEWPROC"]
 
     class Matcher:
         def matching_rules(self, message, rules):
@@ -224,3 +234,30 @@ def test_worker_redelivery_retries_saved_notification_after_message_is_read(tmp_
     assert second.acked is True
     assert store.get_event("me@example.com", "m1")["status"] == "completed"
     assert calls == {"run": 1, "send": 2}
+
+
+def test_background_sweep_stamps_terminal_unlabeled_messages(tmp_path):
+    # A ledger row that is already terminal (completed, or unmatched past its rematch
+    # window) but whose message never received the processed label — e.g. rows predating
+    # the label — must be stamped by the sweep so it stops being listed.
+    store = Store(tmp_path / "app.db")
+    account = "me@example.com"
+    store.set_setting("account_email", account)
+    store.claim_message(account, "done")
+    store.finish_message(account, "done", "completed", [1], "notified")
+    stamped: list[str] = []
+
+    class Gmail:
+        processed_label_id = "HEWPROC"
+
+        def fetch_message(self, message_id):
+            return EmailMessage(message_id, "t", None, "a", "b", "s", "body", 1, [])
+
+        def add_processed_label(self, message_id):
+            stamped.append(message_id)
+
+    engine = WorkflowEngine(store, None, Gmail(), None, None, account)
+    worker = WorkflowWorker(store, Gmail(), engine)
+    worker._process_ids(account, ["done"], background=True)
+    assert stamped == ["done"]
+    assert store.get_event(account, "done")["status"] == "completed"
