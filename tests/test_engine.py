@@ -183,6 +183,54 @@ def test_exact_no_notification_result_completes_silently():
     assert events == ["label", "read", "finished:completed_silent:"]
 
 
+def test_no_notification_terminal_sentinel_suppresses_cli_reasoning_output():
+    events: list[str] = []
+
+    class Store:
+        def claim_message(self, account, message_id):
+            return True
+
+        def finish_message(self, account, message_id, status, matched_rule_ids, notification):
+            events.append(f"finished:{status}:{notification}")
+
+    class Matcher:
+        def matching_rules(self, message, candidates):
+            return candidates
+
+    class Gmail:
+        def mark_read(self, message_id):
+            events.append("read")
+
+        def add_processed_label(self, message_id):
+            events.append("label")
+
+    class Runner:
+        def run(self, rule, message):
+            return TaskResult(
+                rule.id,
+                rule.name,
+                True,
+                "Planning precise wine research strategy\n"
+                "Confirming review details\n"
+                "NO_NOTIFICATION",
+            )
+
+    class Notifier:
+        def send(self, text):
+            raise AssertionError("terminal NO_NOTIFICATION sentinel must suppress delivery")
+
+    email = EmailMessage("m1", "t1", "<a@b>", "a", "b", "s", "body", 1)
+    rule = Rule(id=1, name="conditional", gmail_query="from:a", prompt_template="x")
+
+    result = WorkflowEngine(Store(), Matcher(), Gmail(), Runner(), Notifier(), "me").process(
+        email, [rule]
+    )
+
+    assert result.status == "completed_silent"
+    assert result.notification == ""
+    assert events == ["label", "read", "finished:completed_silent:"]
+
+
 def test_silent_result_is_omitted_when_another_rule_has_output():
     class Store:
         def claim_message(self, account, message_id):

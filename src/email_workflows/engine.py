@@ -66,7 +66,7 @@ class WorkflowEngine:
             visible_rule_results = [
                 (rule, result)
                 for rule, result in rule_results
-                if not (result.success and result.output.strip() == "NO_NOTIFICATION")
+                if not self._is_silent_result(result)
             ]
             if not visible_rule_results:
                 status = "completed_silent"
@@ -141,6 +141,13 @@ class WorkflowEngine:
             self.account_email, message_id, final_status, rule_ids, notification
         )
         return notification
+
+    @staticmethod
+    def _is_silent_result(result: TaskResult) -> bool:
+        if not result.success:
+            return False
+        lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+        return bool(lines) and lines[-1] == "NO_NOTIFICATION"
 
     @staticmethod
     def _encode_deliveries(deliveries: list[dict]) -> str:
